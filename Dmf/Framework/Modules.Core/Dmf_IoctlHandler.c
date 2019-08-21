@@ -21,6 +21,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Core.h"
 #include "DmfModules.Core.Trace.h"
 
@@ -63,6 +64,8 @@ DMF_MODULE_DECLARE_CONFIG(IoctlHandler)
 // DMF Module Support Code
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
+
+#include <devpkey.h>
 
 #pragma code_seg("PAGE")
 static
@@ -276,7 +279,7 @@ Exit:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -328,6 +331,7 @@ Return Value:
     size_t bytesReturned;
     NTSTATUS ntStatus;
     DMF_CONFIG_IoctlHandler* moduleConfig;
+    KPROCESSOR_MODE requestSenderMode;
 
     UNREFERENCED_PARAMETER(Queue);
     UNREFERENCED_PARAMETER(InputBufferLength);
@@ -342,6 +346,19 @@ Return Value:
     handled = FALSE;
     bytesReturned = 0;
     ntStatus = STATUS_INVALID_DEVICE_REQUEST;
+
+    // If queue is only allowed handle requests from kernel mode, reject all other types of requests.
+    // 
+    requestSenderMode = WdfRequestGetRequestorMode(Request);
+
+    if (moduleConfig->KernelModeRequestsOnly &&
+        requestSenderMode != KernelMode)
+    {
+        handled = TRUE;
+        ntStatus = STATUS_ACCESS_DENIED;
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "User mode access detected on kernel mode only queue.");
+        goto Exit;
+    }
 
     for (ULONG tableIndex = 0; tableIndex < moduleConfig->IoctlRecordCount; tableIndex++)
     {
@@ -472,6 +489,8 @@ Return Value:
         }
     }
 
+Exit:
+
     if (handled)
     {
         if (STATUS_PENDING == ntStatus)
@@ -556,15 +575,19 @@ Return Value:
     moduleContext = DMF_CONTEXT_GET(DmfModule);
     moduleConfig = DMF_CONFIG_GET(DmfModule);
 
-    if (IoctlHandler_AccessModeDefault == moduleConfig->AccessModeFilter)
+    if (IoctlHandler_AccessModeDefault == moduleConfig->AccessModeFilter ||
+        IoctlHandler_AccessModeFilterKernelModeOnly == moduleConfig->AccessModeFilter)
     {
         // Callback does nothing...just do what WDF would normally do.
         // This call supports both filter and non-filter drivers correctly.
         //
         TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "IoctlHandler_AccessModeDefault");
-        handled = DMF_ModuleRequestCompleteOrForward(DmfModule,
-                                                     Request,
-                                                     STATUS_SUCCESS);
+        if (DMF_ModuleIsInFilterDriver(DmfModule))
+        {
+            handled = DMF_ModuleRequestCompleteOrForward(DmfModule,
+                                                         Request,
+                                                         STATUS_SUCCESS);
+        }
     }
     else if ((IoctlHandler_AccessModeFilterAdministratorOnly == moduleConfig->AccessModeFilter) ||
              (IoctlHandler_AccessModeFilterAdministratorOnlyPerIoctl == moduleConfig->AccessModeFilter))
@@ -641,12 +664,15 @@ RequestComplete:
 
 #endif // !defined(DMF_USER_MODE)
 
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "EVT_DMF_IoctlHandler_AccessModeFilterAdministratorOnly ntStatus=%!STATUS!", ntStatus);
-        // This call completes the request correctly for both filter and non-filter drivers.
-        //
-        handled = DMF_ModuleRequestCompleteOrForward(DmfModule,
-                                                     Request,
-                                                     ntStatus);
+        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "EVT_DMF_IoctlHandler_AccessModeFilterAdministrator* ntStatus=%!STATUS!", ntStatus);
+        if (!NT_SUCCESS(ntStatus))
+        {
+            // This call completes the request correctly for both filter and non-filter drivers.
+            //
+            handled = DMF_ModuleRequestCompleteOrForward(DmfModule,
+                                                         Request,
+                                                         ntStatus);
+        }
     }
     else if (IoctlHandler_AccessModeFilterClientCallback == moduleConfig->AccessModeFilter)
     {
@@ -654,8 +680,8 @@ RequestComplete:
         //
         TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "EVT_DMF_IoctlHandler_AccessModeFilterClientCallback");
         ASSERT(moduleConfig->EvtIoctlHandlerAccessModeFilter != NULL);
-        // NOTE: This callback must use DMF_ModuleRequestCompleteOrForward() to complete the request
-        //       or return FALSE.
+        // NOTE: This callback must use DMF_ModuleRequestCompleteOrForward() to complete the request if the 
+        //       return status is not STATUS_SUCCESS; or, return FALSE.
         //
         handled = moduleConfig->EvtIoctlHandlerAccessModeFilter(DmfModule,
                                                                 Device,
@@ -668,8 +694,7 @@ RequestComplete:
         //
         ASSERT(FALSE);
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "IoctlHandler_AccessModeInvalid");
-        // WARNING: Request is not completed.
-        // This code should not run,
+        // WARNING: Request is not completed. This code should not run.
         //
     }
 
@@ -936,15 +961,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_IoctlHandler;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_IoctlHandler;
-static DMF_CALLBACKS_WDF DmfCallbacksWdf_IoctlHandler;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -967,7 +983,7 @@ Routine Description:
 
 Arguments:
 
-    Device - Client driver's WDFDEVICE object.
+    Device - Client Driver's WDFDEVICE object.
     DmfModuleAttributes - Opaque structure that contains parameters DMF needs to initialize the Module.
     ObjectAttributes - WDF object attributes for DMFMODULE.
     DmfModule - Address of the location where the created DMFMODULE handle is returned.
@@ -979,35 +995,52 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_IoctlHandler;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_IoctlHandler;
+    DMF_CALLBACKS_WDF dmfCallbacksWdf_IoctlHandler;
+    DMF_CONFIG_IoctlHandler* moduleConfig;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_IoctlHandler);
-    DmfCallbacksDmf_IoctlHandler.DeviceOpen = DMF_IoctlHandler_Open;
-    DmfCallbacksDmf_IoctlHandler.DeviceClose = DMF_IoctlHandler_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_IoctlHandler);
+    dmfCallbacksDmf_IoctlHandler.DeviceOpen = DMF_IoctlHandler_Open;
+    dmfCallbacksDmf_IoctlHandler.DeviceClose = DMF_IoctlHandler_Close;
 
-    DMF_CALLBACKS_WDF_INIT(&DmfCallbacksWdf_IoctlHandler);
-    DmfCallbacksWdf_IoctlHandler.ModuleDeviceIoControl = DMF_IoctlHandler_ModuleDeviceIoControl;
-    DmfCallbacksWdf_IoctlHandler.ModuleFileCreate = DMF_IoctlHandler_FileCreate;
-    DmfCallbacksWdf_IoctlHandler.ModuleFileCleanup = DMF_IoctlHandler_FileCleanup;
-    DmfCallbacksWdf_IoctlHandler.ModuleFileClose = DMF_IoctlHandler_FileClose;
+    DMF_CALLBACKS_WDF_INIT(&dmfCallbacksWdf_IoctlHandler);
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_IoctlHandler,
+    moduleConfig = (DMF_CONFIG_IoctlHandler*)DmfModuleAttributes->ModuleConfigPointer;
+
+    if (moduleConfig->AccessModeFilter == IoctlHandler_AccessModeFilterKernelModeOnly)
+    {
+        // Only allow IOCTLs to come from other Kernel-mode components.
+        //
+        dmfCallbacksWdf_IoctlHandler.ModuleInternalDeviceIoControl = DMF_IoctlHandler_ModuleDeviceIoControl;
+    }
+    else
+    {
+        // Allow IOCTLs to come from User-mode applications.
+        //
+        dmfCallbacksWdf_IoctlHandler.ModuleDeviceIoControl = DMF_IoctlHandler_ModuleDeviceIoControl;
+    }
+    dmfCallbacksWdf_IoctlHandler.ModuleFileCreate = DMF_IoctlHandler_FileCreate;
+    dmfCallbacksWdf_IoctlHandler.ModuleFileCleanup = DMF_IoctlHandler_FileCleanup;
+    dmfCallbacksWdf_IoctlHandler.ModuleFileClose = DMF_IoctlHandler_FileClose;
+
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_IoctlHandler,
                                             IoctlHandler,
                                             DMF_CONTEXT_IoctlHandler,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_IoctlHandler.CallbacksDmf = &DmfCallbacksDmf_IoctlHandler;
-    DmfModuleDescriptor_IoctlHandler.CallbacksWdf = &DmfCallbacksWdf_IoctlHandler;
-    DmfModuleDescriptor_IoctlHandler.ModuleConfigSize = sizeof(DMF_CONFIG_IoctlHandler);
+    dmfModuleDescriptor_IoctlHandler.CallbacksDmf = &dmfCallbacksDmf_IoctlHandler;
+    dmfModuleDescriptor_IoctlHandler.CallbacksWdf = &dmfCallbacksWdf_IoctlHandler;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_IoctlHandler,
+                                &dmfModuleDescriptor_IoctlHandler,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -1054,8 +1087,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_IoctlHandler);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 IoctlHandler);
 
     FuncEntry(DMF_TRACE);
 

@@ -113,7 +113,23 @@ DMF_DeviceInterfaceTarget_Send(
     _In_ ContinuousRequestTarget_RequestType RequestType,
     _In_ ULONG RequestIoctl,
     _In_ ULONG RequestTimeoutMilliseconds,
-    _In_opt_ EVT_DMF_ContinuousRequestTarget_SingleAsynchronousBufferOutput* EvtContinuousRequestTargetSingleAsynchronousRequest,
+    _In_opt_ EVT_DMF_ContinuousRequestTarget_SendCompletion* EvtContinuousRequestTargetSingleAsynchronousRequest,
+    _In_opt_ VOID* SingleAsynchronousRequestClientContext
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DMF_DeviceInterfaceTarget_SendEx(
+    _In_ DMFMODULE DmfModule,
+    _In_reads_bytes_(RequestLength) VOID* RequestBuffer,
+    _In_ size_t RequestLength,
+    _Out_writes_bytes_(ResponseLength) VOID* ResponseBuffer,
+    _In_ size_t ResponseLength,
+    _In_ ContinuousRequestTarget_RequestType RequestType,
+    _In_ ULONG RequestIoctl,
+    _In_ ULONG RequestTimeoutMilliseconds,
+    _In_ ContinuousRequestTarget_CompletionOptions CompletionOption,
+    _In_opt_ EVT_DMF_ContinuousRequestTarget_SendCompletion* EvtContinuousRequestTargetSingleAsynchronousRequest,
     _In_opt_ VOID* SingleAsynchronousRequestClientContext
     );
 
@@ -137,7 +153,7 @@ DMF_DeviceInterfaceTarget_StreamStart(
     _In_ DMFMODULE DmfModule
     );
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_DeviceInterfaceTarget_StreamStop(
     _In_ DMFMODULE DmfModule

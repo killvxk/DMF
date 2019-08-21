@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -44,7 +45,7 @@ typedef struct
     WDFIOTARGET IoTarget;
     //
     //
-    DMFMODULE DmfModuleContinuousRequestTarget;
+    DMFMODULE DmfModuleRequestTarget;
 } DMF_CONTEXT_SelfTarget;
 
 // This macro declares the following function:
@@ -62,7 +63,7 @@ DMF_MODULE_DECLARE_NO_CONFIG(SelfTarget)
 //
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -136,8 +137,8 @@ Return Value:
         goto Exit;
     }
 
-    DMF_ContinuousRequestTarget_IoTargetSet(moduleContext->DmfModuleContinuousRequestTarget,
-                                            moduleContext->IoTarget);
+    DMF_RequestTarget_IoTargetSet(moduleContext->DmfModuleRequestTarget,
+                                  moduleContext->IoTarget);
 
 Exit:
 
@@ -217,7 +218,6 @@ Return Value:
 {
     DMF_MODULE_ATTRIBUTES moduleAttributes;
     DMF_CONTEXT_SelfTarget* moduleContext;
-    DMF_CONFIG_ContinuousRequestTarget continuousRequestTargetModuleConfig;
 
     UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
 
@@ -227,27 +227,18 @@ Return Value:
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
-    // ContinuousRequestTarget
-    // -----------------------
+    // RequestTarget
+    // -------------
     //
-    DMF_CONFIG_ContinuousRequestTarget_AND_ATTRIBUTES_INIT(&continuousRequestTargetModuleConfig,
-                                                           &moduleAttributes);
+    DMF_RequestTarget_ATTRIBUTES_INIT(&moduleAttributes);
     DMF_DmfModuleAdd(DmfModuleInit,
                      &moduleAttributes,
                      WDF_NO_OBJECT_ATTRIBUTES,
-                     &moduleContext->DmfModuleContinuousRequestTarget);
+                     &moduleContext->DmfModuleRequestTarget);
 
     FuncExitVoid(DMF_TRACE);
 }
 #pragma code_seg()
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_SelfTarget;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_SelfTarget;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -284,28 +275,30 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_SelfTarget;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_SelfTarget;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_SelfTarget);
-    DmfCallbacksDmf_SelfTarget.DeviceOpen = DMF_SelfTarget_Open;
-    DmfCallbacksDmf_SelfTarget.DeviceClose = DMF_SelfTarget_Close;
-    DmfCallbacksDmf_SelfTarget.ChildModulesAdd = DMF_SelfTarget_ChildModulesAdd;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_SelfTarget);
+    dmfCallbacksDmf_SelfTarget.DeviceOpen = DMF_SelfTarget_Open;
+    dmfCallbacksDmf_SelfTarget.DeviceClose = DMF_SelfTarget_Close;
+    dmfCallbacksDmf_SelfTarget.ChildModulesAdd = DMF_SelfTarget_ChildModulesAdd;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_SelfTarget,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_SelfTarget,
                                             SelfTarget,
                                             DMF_CONTEXT_SelfTarget,
-                                            DMF_MODULE_OPTIONS_PASSIVE,
-                                            DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
+                                            DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM,
+                                            DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_SelfTarget.CallbacksDmf = &DmfCallbacksDmf_SelfTarget;
+    dmfModuleDescriptor_SelfTarget.CallbacksDmf = &dmfCallbacksDmf_SelfTarget;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_SelfTarget,
+                                &dmfModuleDescriptor_SelfTarget,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -333,8 +326,8 @@ DMF_SelfTarget_Get(
 
     PAGED_CODE();
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SelfTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SelfTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -357,7 +350,7 @@ DMF_SelfTarget_Send(
     _In_ ContinuousRequestTarget_RequestType RequestType,
     _In_ ULONG RequestIoctl,
     _In_ ULONG RequestTimeoutMilliseconds,
-    _In_opt_ EVT_DMF_ContinuousRequestTarget_SingleAsynchronousBufferOutput* EvtContinuousRequestTargetSingleAsynchronousRequest,
+    _In_opt_ EVT_DMF_ContinuousRequestTarget_SendCompletion* EvtContinuousRequestTargetSingleAsynchronousRequest,
     _In_opt_ VOID* SingleAsynchronousRequestClientContext
     )
 /*++
@@ -391,23 +384,23 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SelfTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SelfTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
     ASSERT(moduleContext->IoTarget != NULL);
 
-    ntStatus = DMF_ContinuousRequestTarget_Send(moduleContext->DmfModuleContinuousRequestTarget,
-                                                RequestBuffer,
-                                                RequestLength,
-                                                ResponseBuffer,
-                                                ResponseLength,
-                                                RequestType,
-                                                RequestIoctl,
-                                                RequestTimeoutMilliseconds,
-                                                EvtContinuousRequestTargetSingleAsynchronousRequest,
-                                                SingleAsynchronousRequestClientContext);
+    ntStatus = DMF_RequestTarget_Send(moduleContext->DmfModuleRequestTarget,
+                                      RequestBuffer,
+                                      RequestLength,
+                                      ResponseBuffer,
+                                      ResponseLength,
+                                      RequestType,
+                                      RequestIoctl,
+                                      RequestTimeoutMilliseconds,
+                                      EvtContinuousRequestTargetSingleAsynchronousRequest,
+                                      SingleAsynchronousRequestClientContext);
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
 
@@ -457,22 +450,22 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SelfTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SelfTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
     ASSERT(moduleContext->IoTarget != NULL);
 
-    ntStatus = DMF_ContinuousRequestTarget_SendSynchronously(moduleContext->DmfModuleContinuousRequestTarget,
-                                                             RequestBuffer,
-                                                             RequestLength,
-                                                             ResponseBuffer,
-                                                             ResponseLength,
-                                                             RequestType,
-                                                             RequestIoctl,
-                                                             RequestTimeoutMilliseconds,
-                                                             BytesWritten);
+    ntStatus = DMF_RequestTarget_SendSynchronously(moduleContext->DmfModuleRequestTarget,
+                                                   RequestBuffer,
+                                                   RequestLength,
+                                                   ResponseBuffer,
+                                                   ResponseLength,
+                                                   RequestType,
+                                                   RequestIoctl,
+                                                   RequestTimeoutMilliseconds,
+                                                   BytesWritten);
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
 

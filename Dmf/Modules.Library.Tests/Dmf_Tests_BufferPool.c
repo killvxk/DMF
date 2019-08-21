@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.Tests.h"
 #include "DmfModules.Library.Tests.Trace.h"
 
@@ -32,7 +33,7 @@ Environment:
 #define BUFFER_SIZE                 (32)
 #define BUFFER_COUNT_PREALLOCATED   (16)
 #define BUFFER_COUNT_MAX            (24)
-#define THREAD_COUNT                (4)
+#define THREAD_COUNT                (2)
 
 #define CLIENT_CONTEXT_SIGNATURE    'GISB'
 
@@ -53,8 +54,8 @@ typedef enum _TEST_ACTION {
     TEST_ACTION_RETURN,
     TEST_ACTION_ENUMERATE,
     TEST_ACTION_COUNT,
-    TEST_ACTION_MIN     = TEST_ACTION_AQUIRE,
-    TEST_ACTION_MAX     = TEST_ACTION_COUNT
+    TEST_ACTION_MINIUM      = TEST_ACTION_AQUIRE,
+    TEST_ACTION_MAXIMUM     = TEST_ACTION_COUNT
 } TEST_ACTION;
 
 typedef enum _GET_ACTION {
@@ -336,7 +337,7 @@ BufferPool_Enumeration_Callback(
 
 #pragma code_seg("PAGE")
 static
-void
+NTSTATUS
 Tests_BufferPool_ThreadAction_BufferAquire(
     _In_ DMFMODULE DmfModule
     )
@@ -351,6 +352,7 @@ Tests_BufferPool_ThreadAction_BufferAquire(
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
+    ntStatus = STATUS_SUCCESS;
     clientBuffer = NULL;
     clientBufferContext = NULL;
 
@@ -366,7 +368,10 @@ Tests_BufferPool_ThreadAction_BufferAquire(
     ntStatus = Tests_BufferPool_GetFromPool(moduleContext->DmfModuleBufferPoolSource,
                                             &clientBuffer,
                                             &clientBufferContext);
-    ASSERT(NT_SUCCESS(ntStatus));
+    if (!NT_SUCCESS(ntStatus))
+    {
+        goto Exit;
+    }
     ASSERT(clientBuffer != NULL);
     ASSERT(clientBufferContext != NULL);
 
@@ -406,13 +411,13 @@ Tests_BufferPool_ThreadAction_BufferAquire(
 
 Exit:
 
-    return;
+    return ntStatus;
 }
 #pragma code_seg()
 
 #pragma code_seg("PAGE")
 static
-void
+NTSTATUS
 Tests_BufferPool_ThreadAction_BufferReturn(
     _In_ DMFMODULE DmfModule
 )
@@ -433,6 +438,9 @@ Tests_BufferPool_ThreadAction_BufferReturn(
                                             &clientBufferContext);
     if (!NT_SUCCESS(ntStatus))
     {
+        // There is no buffer in sink pool because it has been called before acquire. 
+        //
+        ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
 
@@ -443,13 +451,13 @@ Tests_BufferPool_ThreadAction_BufferReturn(
 
 Exit:
 
-    return;
+    return ntStatus;
 }
 #pragma code_seg()
 
 #pragma code_seg("PAGE")
 static
-void
+NTSTATUS
 Tests_BufferPool_ThreadAction_BufferEnumerate(
     _In_ DMFMODULE DmfModule
 )
@@ -459,11 +467,13 @@ Tests_BufferPool_ThreadAction_BufferEnumerate(
     PUINT8 clientBuffer;
     ULONG randomNumber;
     CLIENT_BUFFER_CONTEXT* clientBufferContext;
+    NTSTATUS ntStatus;
 
     PAGED_CODE();
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
+    ntStatus = STATUS_SUCCESS;
     clientBuffer = NULL;
     clientBufferContext = NULL;
 
@@ -498,21 +508,25 @@ Tests_BufferPool_ThreadAction_BufferEnumerate(
         DMF_BufferPool_Put(moduleContext->DmfModuleBufferPoolSource,
                            clientBuffer);
     }
+
+    return ntStatus;
 }
 #pragma code_seg()
 
 #pragma code_seg("PAGE")
 static
-void
+NTSTATUS
 Tests_BufferPool_ThreadAction_BufferCount(
     _In_ DMFMODULE DmfModule
     )
 {
     DMF_CONTEXT_Tests_BufferPool* moduleContext;
     ULONG currentCount;
+    NTSTATUS ntStatus;
 
     PAGED_CODE();
 
+    ntStatus = STATUS_SUCCESS;
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
     // Get the current number of buffers in sink
@@ -524,6 +538,8 @@ Tests_BufferPool_ThreadAction_BufferCount(
     // So a number of acquired buffers may be up to THREAD_COUNT more, in case of a race conditions.
     //
     ASSERT(currentCount <= BUFFER_COUNT_MAX + THREAD_COUNT);
+
+    return ntStatus;
 }
 #pragma code_seg()
 
@@ -538,6 +554,7 @@ Tests_BufferPool_WorkThread(
     DMFMODULE dmfModule;
     DMF_CONTEXT_Tests_BufferPool* moduleContext;
     TEST_ACTION testAction;
+    NTSTATUS ntStatus;
 
     PAGED_CODE();
 
@@ -546,28 +563,32 @@ Tests_BufferPool_WorkThread(
 
     // Generate a random test action Id for a current iteration.
     //
-    testAction = (TEST_ACTION)TestsUtility_GenerateRandomNumber(TEST_ACTION_MIN,
-                                                                TEST_ACTION_MAX);
+    testAction = (TEST_ACTION)TestsUtility_GenerateRandomNumber(TEST_ACTION_MINIUM,
+                                                                TEST_ACTION_MAXIMUM);
     // Execute the test action.
     //
     switch (testAction)
     {
     case TEST_ACTION_AQUIRE:
-        Tests_BufferPool_ThreadAction_BufferAquire(dmfModule);
+        ntStatus = Tests_BufferPool_ThreadAction_BufferAquire(dmfModule);
         break;
     case TEST_ACTION_RETURN:
-        Tests_BufferPool_ThreadAction_BufferReturn(dmfModule);
+        ntStatus = Tests_BufferPool_ThreadAction_BufferReturn(dmfModule);
         break;
     case TEST_ACTION_ENUMERATE:
-        Tests_BufferPool_ThreadAction_BufferEnumerate(dmfModule);
+        ntStatus = Tests_BufferPool_ThreadAction_BufferEnumerate(dmfModule);
         break;
     case TEST_ACTION_COUNT:
-        Tests_BufferPool_ThreadAction_BufferCount(dmfModule);
+        ntStatus = Tests_BufferPool_ThreadAction_BufferCount(dmfModule);
         break;
     default:
+        ntStatus = STATUS_UNSUCCESSFUL;
         ASSERT(FALSE);
         break;
     }
+
+    ASSERT(NT_SUCCESS(ntStatus) ||
+           DMF_Thread_IsStopPending(DmfModuleThread));
 
     // Repeat the test, until stop is signaled.
     //
@@ -579,6 +600,11 @@ Tests_BufferPool_WorkThread(
     TestsUtility_YieldExecution();
 }
 #pragma code_seg()
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+// WDF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // DMF Module Callbacks
@@ -685,13 +711,91 @@ Return Value:
 }
 #pragma code_seg()
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_Tests_BufferPool_ChildModulesAdd(
+    _In_ DMFMODULE DmfModule,
+    _In_ DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+    _In_ PDMFMODULE_INIT DmfModuleInit
+    )
+/*++
 
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Tests_BufferPool;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Tests_BufferPool;
+Routine Description:
+
+    Configure and add the required Child Modules to the given Parent Module.
+
+Arguments:
+
+    DmfModule - The given Parent Module.
+    DmfParentModuleAttributes - Pointer to the parent DMF_MODULE_ATTRIBUTES structure.
+    DmfModuleInit - Opaque structure to be passed to DMF_DmfModuleAdd.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_MODULE_ATTRIBUTES moduleAttributes;
+    DMF_CONTEXT_Tests_BufferPool* moduleContext;
+    DMF_CONFIG_BufferPool moduleConfigBufferPool;
+    DMF_CONFIG_Thread moduleConfigThread;
+
+    UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    // BufferPool Source
+    // -----------------
+    //
+    DMF_CONFIG_BufferPool_AND_ATTRIBUTES_INIT(&moduleConfigBufferPool,
+                                              &moduleAttributes);
+    moduleConfigBufferPool.BufferPoolMode = BufferPool_Mode_Source;
+    moduleConfigBufferPool.Mode.SourceSettings.BufferContextSize = sizeof(CLIENT_BUFFER_CONTEXT);
+    moduleConfigBufferPool.Mode.SourceSettings.BufferSize = BUFFER_SIZE;
+    moduleConfigBufferPool.Mode.SourceSettings.BufferCount = BUFFER_COUNT_PREALLOCATED;
+    moduleConfigBufferPool.Mode.SourceSettings.CreateWithTimer = TRUE;
+    moduleConfigBufferPool.Mode.SourceSettings.EnableLookAside = TRUE;
+    moduleConfigBufferPool.Mode.SourceSettings.PoolType = NonPagedPoolNx;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                     &moduleAttributes,
+                     WDF_NO_OBJECT_ATTRIBUTES,
+                     &moduleContext->DmfModuleBufferPoolSource);
+
+    // BufferPool Sink
+    // ---------------
+    //
+    DMF_CONFIG_BufferPool_AND_ATTRIBUTES_INIT(&moduleConfigBufferPool,
+                                              &moduleAttributes);
+    moduleConfigBufferPool.BufferPoolMode = BufferPool_Mode_Sink;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                     &moduleAttributes,
+                     WDF_NO_OBJECT_ATTRIBUTES,
+                     &moduleContext->DmfModuleBufferPoolSink);
+
+    // Thread
+    // ------
+    //
+    for (ULONG threadIndex = 0; threadIndex < THREAD_COUNT; threadIndex++)
+    {
+        DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
+                                              &moduleAttributes);
+        moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
+        moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_BufferPool_WorkThread;
+        DMF_DmfModuleAdd(DmfModuleInit,
+                         &moduleAttributes,
+                         WDF_NO_OBJECT_ATTRIBUTES,
+                         &moduleContext->DmfModuleThread[threadIndex]);
+    }
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -727,124 +831,34 @@ Return Value:
 
 --*/
 {
-    DMFMODULE dmfModule;
-    DMF_CONTEXT_Tests_BufferPool* moduleContext;
-    DMF_CONFIG_Thread moduleConfigThread;
-    DMF_CONFIG_BufferPool moduleConfigBufferPool;
-    WDF_OBJECT_ATTRIBUTES objectAttributes;
-    DMF_MODULE_ATTRIBUTES moduleAttributes;
-    LONG index;
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Tests_BufferPool;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Tests_BufferPool;
 
     PAGED_CODE();
 
-    dmfModule = NULL;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Tests_BufferPool);
+    dmfCallbacksDmf_Tests_BufferPool.ChildModulesAdd = DMF_Tests_BufferPool_ChildModulesAdd;
+    dmfCallbacksDmf_Tests_BufferPool.DeviceOpen = Tests_BufferPool_Open;
+    dmfCallbacksDmf_Tests_BufferPool.DeviceClose = Tests_BufferPool_Close;
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Tests_BufferPool);
-    DmfCallbacksDmf_Tests_BufferPool.DeviceOpen = Tests_BufferPool_Open;
-    DmfCallbacksDmf_Tests_BufferPool.DeviceClose = Tests_BufferPool_Close;
-
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Tests_BufferPool,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Tests_BufferPool,
                                             Tests_BufferPool,
                                             DMF_CONTEXT_Tests_BufferPool,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Tests_BufferPool.CallbacksDmf = &DmfCallbacksDmf_Tests_BufferPool;
+    dmfModuleDescriptor_Tests_BufferPool.CallbacksDmf = &dmfCallbacksDmf_Tests_BufferPool;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Tests_BufferPool,
-                                &dmfModule);
+                                &dmfModuleDescriptor_Tests_BufferPool,
+                                DmfModule);
     if (!NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
     }
-
-    moduleContext = DMF_CONTEXT_GET(dmfModule);
-
-    // Create child modules
-    //
-
-    // DmfModule will be set as ParentObject for all child modules.
-    //
-    WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
-    objectAttributes.ParentObject = dmfModule;
-
-    // BufferPool Source
-    // -----------------
-    //
-    DMF_CONFIG_BufferPool_AND_ATTRIBUTES_INIT(&moduleConfigBufferPool,
-                                              &moduleAttributes);
-    moduleConfigBufferPool.BufferPoolMode = BufferPool_Mode_Source;
-    moduleConfigBufferPool.Mode.SourceSettings.BufferContextSize = sizeof(CLIENT_BUFFER_CONTEXT);
-    moduleConfigBufferPool.Mode.SourceSettings.BufferSize = BUFFER_SIZE;
-    moduleConfigBufferPool.Mode.SourceSettings.BufferCount = BUFFER_COUNT_PREALLOCATED;
-    moduleConfigBufferPool.Mode.SourceSettings.CreateWithTimer = TRUE;
-    moduleConfigBufferPool.Mode.SourceSettings.EnableLookAside = TRUE;
-    moduleConfigBufferPool.Mode.SourceSettings.PoolType = NonPagedPoolNx;
-    ntStatus = DMF_BufferPool_Create(Device,
-                                     &moduleAttributes,
-                                     &objectAttributes,
-                                     &moduleContext->DmfModuleBufferPoolSource);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_BufferPool_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // BufferPool Sink
-    // -----------------
-    //
-    DMF_CONFIG_BufferPool_AND_ATTRIBUTES_INIT(&moduleConfigBufferPool,
-                                              &moduleAttributes);
-    moduleConfigBufferPool.BufferPoolMode = BufferPool_Mode_Sink;
-    ntStatus = DMF_BufferPool_Create(Device,
-                                     &moduleAttributes,
-                                     &objectAttributes,
-                                     &moduleContext->DmfModuleBufferPoolSink);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_BufferPool_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // Thread array
-    // ------------
-    //
-    for (index = 0; index < THREAD_COUNT; index++)
-    {
-        DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
-                                              &moduleAttributes);
-        moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
-        moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_BufferPool_WorkThread;
-        ntStatus = DMF_Thread_Create(Device,
-                                     &moduleAttributes,
-                                     &objectAttributes,
-                                     &moduleContext->DmfModuleThread[index]);
-        if (!NT_SUCCESS(ntStatus))
-        {
-            TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_Thread_Create fails: ntStatus=%!STATUS!", ntStatus);
-            goto Exit;
-        }
-
-
-    }
-    
-    *DmfModule = dmfModule;
-
-Exit:
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        if (NULL != dmfModule)
-        {
-            DMF_Module_Destroy(dmfModule);
-            dmfModule = NULL;
-        }
-    }    
 
     return(ntStatus);
 }

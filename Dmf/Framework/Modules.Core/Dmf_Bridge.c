@@ -9,7 +9,7 @@ Module Name:
 
 Abstract:
 
-    Chains the WDF callbacks to DMF and the Client driver.
+    Chains the WDF callbacks to DMF and the Client Driver.
 
 Environment:
 
@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Core.h"
 #include "DmfModules.Core.Trace.h"
 
@@ -863,7 +864,7 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -1474,7 +1475,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -1515,7 +1516,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -1712,7 +1713,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -1860,7 +1861,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -2013,7 +2014,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -2054,7 +2055,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -2153,7 +2154,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -2194,7 +2195,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -2442,9 +2443,6 @@ Return Value:
     {
         moduleContext->EvtDeviceContextCleanup(device);
     }
-
-    DMF_ModuleDestroy(DmfModule);
-    DmfModule = NULL;
 }
 #pragma code_seg()
 
@@ -2654,15 +2652,6 @@ Return Value:
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Bridge;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Bridge;
-static DMF_CALLBACKS_WDF DmfCallbacksWdf_Bridge;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -2685,7 +2674,7 @@ Routine Description:
 
 Arguments:
 
-    Device - Client driver's WDFDEVICE object.
+    Device - Client Driver's WDFDEVICE object.
     DmfModuleAttributes - Opaque structure that contains parameters DMF needs to initialize the Module.
     ObjectAttributes - WDF object attributes for DMFMODULE.
     DmfModule - Address of the location where the created DMFMODULE handle is returned.
@@ -2697,60 +2686,62 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Bridge;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Bridge;
+    DMF_CALLBACKS_WDF dmfCallbacksWdf_Bridge;
 
     PAGED_CODE();
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Bridge);
-    DmfCallbacksDmf_Bridge.ModuleInstanceDestroy = DMF_Bridge_Destroy;
-    DmfCallbacksDmf_Bridge.DeviceOpen = DMF_Bridge_Open;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Bridge);
+    dmfCallbacksDmf_Bridge.ModuleInstanceDestroy = DMF_Bridge_Destroy;
+    dmfCallbacksDmf_Bridge.DeviceOpen = DMF_Bridge_Open;
 
-    DMF_CALLBACKS_WDF_INIT(&DmfCallbacksWdf_Bridge);
-    DmfCallbacksWdf_Bridge.ModulePrepareHardware = DMF_Bridge_ModulePrepareHardware;
-    DmfCallbacksWdf_Bridge.ModuleReleaseHardware = DMF_Bridge_ModuleReleaseHardware;
-    DmfCallbacksWdf_Bridge.ModuleD0Entry = DMF_Bridge_ModuleD0Entry;
-    DmfCallbacksWdf_Bridge.ModuleD0EntryPostInterruptsEnabled = DMF_Bridge_ModuleD0EntryPostInterruptsEnabled;
-    DmfCallbacksWdf_Bridge.ModuleD0ExitPreInterruptsDisabled = DMF_Bridge_ModuleD0ExitPreInterruptsDisabled;
-    DmfCallbacksWdf_Bridge.ModuleD0Exit = DMF_Bridge_ModuleD0Exit;
-    DmfCallbacksWdf_Bridge.ModuleQueueIoRead = DMF_Bridge_ModuleQueueIoRead;
-    DmfCallbacksWdf_Bridge.ModuleQueueIoWrite = DMF_Bridge_ModuleQueueIoWrite;
-    DmfCallbacksWdf_Bridge.ModuleDeviceIoControl = DMF_Bridge_ModuleDeviceIoControl;
+    DMF_CALLBACKS_WDF_INIT(&dmfCallbacksWdf_Bridge);
+    dmfCallbacksWdf_Bridge.ModulePrepareHardware = DMF_Bridge_ModulePrepareHardware;
+    dmfCallbacksWdf_Bridge.ModuleReleaseHardware = DMF_Bridge_ModuleReleaseHardware;
+    dmfCallbacksWdf_Bridge.ModuleD0Entry = DMF_Bridge_ModuleD0Entry;
+    dmfCallbacksWdf_Bridge.ModuleD0EntryPostInterruptsEnabled = DMF_Bridge_ModuleD0EntryPostInterruptsEnabled;
+    dmfCallbacksWdf_Bridge.ModuleD0ExitPreInterruptsDisabled = DMF_Bridge_ModuleD0ExitPreInterruptsDisabled;
+    dmfCallbacksWdf_Bridge.ModuleD0Exit = DMF_Bridge_ModuleD0Exit;
+    dmfCallbacksWdf_Bridge.ModuleQueueIoRead = DMF_Bridge_ModuleQueueIoRead;
+    dmfCallbacksWdf_Bridge.ModuleQueueIoWrite = DMF_Bridge_ModuleQueueIoWrite;
+    dmfCallbacksWdf_Bridge.ModuleDeviceIoControl = DMF_Bridge_ModuleDeviceIoControl;
 #if !defined(DMF_USER_MODE)
-    DmfCallbacksWdf_Bridge.ModuleInternalDeviceIoControl = DMF_Bridge_ModuleInternalDeviceIoControl;
+    dmfCallbacksWdf_Bridge.ModuleInternalDeviceIoControl = DMF_Bridge_ModuleInternalDeviceIoControl;
 #endif // !defined(DMF_USER_MODE)
-    DmfCallbacksWdf_Bridge.ModuleSelfManagedIoCleanup = DMF_Bridge_ModuleSelfManagedIoCleanup;
-    DmfCallbacksWdf_Bridge.ModuleSelfManagedIoFlush = DMF_Bridge_ModuleSelfManagedIoFlush;
-    DmfCallbacksWdf_Bridge.ModuleSelfManagedIoInit = DMF_Bridge_ModuleSelfManagedIoInit;
-    DmfCallbacksWdf_Bridge.ModuleSelfManagedIoSuspend = DMF_Bridge_ModuleSelfManagedIoSuspend;
-    DmfCallbacksWdf_Bridge.ModuleSelfManagedIoRestart = DMF_Bridge_ModuleSelfManagedIoRestart;
-    DmfCallbacksWdf_Bridge.ModuleSurpriseRemoval = DMF_Bridge_ModuleSurpriseRemoval;
-    DmfCallbacksWdf_Bridge.ModuleQueryRemove = DMF_Bridge_ModuleQueryRemove;
-    DmfCallbacksWdf_Bridge.ModuleQueryStop = DMF_Bridge_ModuleQueryStop;
-    DmfCallbacksWdf_Bridge.ModuleRelationsQuery = DMF_Bridge_ModuleRelationsQuery;
-    DmfCallbacksWdf_Bridge.ModuleUsageNotificationEx = DMF_Bridge_ModuleUsageNotificationEx;
-    DmfCallbacksWdf_Bridge.ModuleArmWakeFromS0 = DMF_Bridge_ModuleArmWakeFromS0;
-    DmfCallbacksWdf_Bridge.ModuleDisarmWakeFromS0 = DMF_Bridge_ModuleDisarmWakeFromS0;
-    DmfCallbacksWdf_Bridge.ModuleWakeFromS0Triggered = DMF_Bridge_ModuleWakeFromS0Triggered;
-    DmfCallbacksWdf_Bridge.ModuleArmWakeFromSxWithReason = DMF_Bridge_ModuleArmWakeFromSxWithReason;
-    DmfCallbacksWdf_Bridge.ModuleDisarmWakeFromSx = DMF_Bridge_ModuleDisarmWakeFromSx;
-    DmfCallbacksWdf_Bridge.ModuleWakeFromSxTriggered = DMF_Bridge_ModuleWakeFromSxTriggered;
-    DmfCallbacksWdf_Bridge.ModuleFileCreate = DMF_Bridge_ModuleFileCreate;
-    DmfCallbacksWdf_Bridge.ModuleFileCleanup = DMF_Bridge_ModuleFileCleanup;
-    DmfCallbacksWdf_Bridge.ModuleFileClose = DMF_Bridge_ModuleFileClose;
+    dmfCallbacksWdf_Bridge.ModuleSelfManagedIoCleanup = DMF_Bridge_ModuleSelfManagedIoCleanup;
+    dmfCallbacksWdf_Bridge.ModuleSelfManagedIoFlush = DMF_Bridge_ModuleSelfManagedIoFlush;
+    dmfCallbacksWdf_Bridge.ModuleSelfManagedIoInit = DMF_Bridge_ModuleSelfManagedIoInit;
+    dmfCallbacksWdf_Bridge.ModuleSelfManagedIoSuspend = DMF_Bridge_ModuleSelfManagedIoSuspend;
+    dmfCallbacksWdf_Bridge.ModuleSelfManagedIoRestart = DMF_Bridge_ModuleSelfManagedIoRestart;
+    dmfCallbacksWdf_Bridge.ModuleSurpriseRemoval = DMF_Bridge_ModuleSurpriseRemoval;
+    dmfCallbacksWdf_Bridge.ModuleQueryRemove = DMF_Bridge_ModuleQueryRemove;
+    dmfCallbacksWdf_Bridge.ModuleQueryStop = DMF_Bridge_ModuleQueryStop;
+    dmfCallbacksWdf_Bridge.ModuleRelationsQuery = DMF_Bridge_ModuleRelationsQuery;
+    dmfCallbacksWdf_Bridge.ModuleUsageNotificationEx = DMF_Bridge_ModuleUsageNotificationEx;
+    dmfCallbacksWdf_Bridge.ModuleArmWakeFromS0 = DMF_Bridge_ModuleArmWakeFromS0;
+    dmfCallbacksWdf_Bridge.ModuleDisarmWakeFromS0 = DMF_Bridge_ModuleDisarmWakeFromS0;
+    dmfCallbacksWdf_Bridge.ModuleWakeFromS0Triggered = DMF_Bridge_ModuleWakeFromS0Triggered;
+    dmfCallbacksWdf_Bridge.ModuleArmWakeFromSxWithReason = DMF_Bridge_ModuleArmWakeFromSxWithReason;
+    dmfCallbacksWdf_Bridge.ModuleDisarmWakeFromSx = DMF_Bridge_ModuleDisarmWakeFromSx;
+    dmfCallbacksWdf_Bridge.ModuleWakeFromSxTriggered = DMF_Bridge_ModuleWakeFromSxTriggered;
+    dmfCallbacksWdf_Bridge.ModuleFileCreate = DMF_Bridge_ModuleFileCreate;
+    dmfCallbacksWdf_Bridge.ModuleFileCleanup = DMF_Bridge_ModuleFileCleanup;
+    dmfCallbacksWdf_Bridge.ModuleFileClose = DMF_Bridge_ModuleFileClose;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Bridge,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Bridge,
                                             Bridge,
                                             DMF_CONTEXT_Bridge,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Bridge.CallbacksDmf = &DmfCallbacksDmf_Bridge;
-    DmfModuleDescriptor_Bridge.CallbacksWdf = &DmfCallbacksWdf_Bridge;
-    DmfModuleDescriptor_Bridge.ModuleConfigSize = sizeof(DMF_CONFIG_Bridge);
+    dmfModuleDescriptor_Bridge.CallbacksDmf = &dmfCallbacksDmf_Bridge;
+    dmfModuleDescriptor_Bridge.CallbacksWdf = &dmfCallbacksWdf_Bridge;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Bridge,
+                                &dmfModuleDescriptor_Bridge,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {

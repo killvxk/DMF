@@ -102,7 +102,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_X86_=1;i386=1;STD_CALL;DEBUG;DBG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules.Template</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -131,7 +131,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;DEBUG;DBG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules.Template</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -160,7 +160,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;DEBUG;DBG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules.Template</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -189,7 +189,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_X86_=1;i386=1;STD_CALL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules.Template</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -218,7 +218,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules.Template</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -247,7 +247,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules.Template</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -280,19 +280,34 @@
     <ClInclude Include="..\..\Modules.Library.Tests\DmfModules.Library.Tests.Trace.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_BufferPool.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_BufferQueue.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_DefaultTarget.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_DeviceInterfaceTarget.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_HashTable.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_IoctlHandler.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_IoctlHandler_Public.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_Pdo.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_PingPongBuffer.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_Registry.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_RingBuffer.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_ScheduledTask.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_SelfTarget.h" />
+    <ClInclude Include="..\..\Modules.Library.Tests\Dmf_Tests_String.h" />
     <ClInclude Include="..\..\Modules.Library.Tests\TestsUtility.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_BufferPool.c" />
     <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_BufferQueue.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_DefaultTarget.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_DeviceInterfaceTarget.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_HashTable.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_IoctlHandler.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_Pdo.c" />
     <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_PingPongBuffer.c" />
     <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_Registry.c" />
     <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_RingBuffer.c" />
     <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_ScheduledTask.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_SelfTarget.c" />
+    <ClCompile Include="..\..\Modules.Library.Tests\Dmf_Tests_String.c" />
     <ClCompile Include="..\..\Modules.Library.Tests\TestsUtility.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

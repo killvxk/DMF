@@ -50,16 +50,18 @@ ContinuousRequestTarget_RequestType_Write | Indicates that the request is sent t
 #### Module Callbacks
 
 -----------------------------------------------------------------------------------------------------------------------------------
-##### EVT_DMF_RequestTarget_SingleAsynchronousBufferOutput
+##### EVT_DMF_RequestTarget_SendCompletion
 ````
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 VOID
-EVT_DMF_RequestTarget_SingleAsynchronousBufferOutput(
+EVT_DMF_RequestTarget_SendCompletion(
     _In_ DMFMODULE DmfModule,
     _In_ VOID* ClientRequestContext,
-    _In_reads_(OutputBufferSize) VOID* OutputBuffer,
-    _In_ size_t OutputBufferSize,
+    _In_reads_(InputBufferBytesWritten) VOID* InputBuffer,
+    _In_ size_t InputBufferBytesWritten,
+    _In_reads_(OutputBufferBytesRead) VOID* OutputBuffer,
+    _In_ size_t OutputBufferBytesRead,
     _In_ NTSTATUS CompletionStatus
     );
 ````
@@ -75,8 +77,10 @@ Parameter | Description
 ----|----
 DmfModule | An open DMF_RequestTarget Module handle.
 ClientRequestContext | The Client specific context the Client sent when sending the request. Usually, this is the corresponding WDFREQUEST.
+InputBuffer | Contains the corresponding WDFREQUEST input buffer.
+InputBufferBytesWritten | Number of bytes written. For IOCTL this will be actual size of the Input Buffer. 
 OutputBuffer | Contains the corresponding WDFREQUEST output buffer.
-OutputBufferSize | The size in bytes of OutputBuffer.
+OutputBufferBytesRead | Number of bytes read.
 CompletionStatus | The completion status sent by the underlying WDFIOTARGET.
 
 ##### Remarks
@@ -153,7 +157,7 @@ DMF_RequestTarget_Send(
   _In_ ContinuousRequestTarget_RequestType RequestType,
   _In_ ULONG RequestIoctl,
   _In_ ULONG RequestTimeoutMilliseconds,
-  _In_opt_ EVT_DMF_RequestTarget_SingleAsynchronousBufferOutput* EvtRequestTargetSingleAsynchronousRequest,
+  _In_opt_ EVT_DMF_RequestTarget_SendCompletion* EvtRequestTargetSingleAsynchronousRequest,
   _In_opt_ VOID* SingleAsynchronousRequestClientContext
   );
 ````
@@ -182,6 +186,51 @@ SingleAsynchronousRequestClientContext | A Client specific context that is sent 
 
 -----------------------------------------------------------------------------------------------------------------------------------
 
+##### DMF_RequestTarget_SendEx
+
+````
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DMF_RequestTarget_SendEx(
+  _In_ DMFMODULE DmfModule,
+  _In_reads_bytes_(RequestLength) VOID* RequestBuffer,
+  _In_ size_t RequestLength,
+  _Out_writes_bytes_(ResponseLength) VOID* ResponseBuffer,
+  _In_ size_t ResponseLength,
+  _In_ ContinuousRequestTarget_RequestType RequestType,
+  _In_ ULONG RequestIoctl,
+  _In_ ULONG RequestTimeoutMilliseconds,
+  _In_ ContinuousRequestTarget_CompletionOptions CompletionOption,
+  _In_opt_ EVT_DMF_RequestTarget_SendCompletion* EvtRequestTargetSingleAsynchronousRequest,
+  _In_opt_ VOID* SingleAsynchronousRequestClientContext
+  );
+````
+
+Creates a WDFREQUEST and asynchronously sends it to the DMF_RequestTarget Module instance's WDFIOTARGET.
+Ex version of DMF_RequestTarget_Send, allows the clients to specify ContinuousRequestTarget_CompletionOptions, which controls how completion routine will be called. 
+
+##### Returns
+
+None
+
+##### Parameters
+Parameter | Description
+----|----
+DmfModule | An open DMF_RequestTarget Module handle.
+RequestBuffer | The input buffer.
+RequestLength | The size in bytes of the input buffer.
+ResponseBuffer | The output buffer.
+ResponseLength | The size in bytes of the output buffer.
+RequestType | Indicates the type of request to send to the underlying WDFIOTARGET.
+RequestIoctl | The IOCTL code to send to the underlying WDFIOTARGET.
+RequestTimeoutMilliseconds | A time in milliseconds that causes the call to timeout if it is not completed in that time period. Use zero for no timeout.
+CompletionOption | Indicates the completion option associated with the completion routine.
+EvtRequestTargetSingleAsynchronousRequest | The Client callback that is called when request completes.
+SingleAsynchronousRequestClientContext | A Client specific context that is sent to the Client callback that is called when the request completes.
+
+##### Remarks
+
+-----------------------------------------------------------------------------------------------------------------------------------
 ##### DMF_RequestTarget_SendSynchronously
 
 ````
@@ -231,7 +280,7 @@ BytesWritten | Indicates how many bytes were written to the output buffer by the
 
 #### Module Remarks
 
-* [DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM] Clients that select any type of paged pool as PoolType must set DMF_MODULE_ATTRIBUTES.PassiveLevel = TRUE. This tells DMF to create PASSIVE_LEVEL locks so that paged pool can be accessed.
+* [DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM] Clients that select any type of paged pool as PoolType must set DMF_MODULE_ATTRIBUTES.PassiveLevel = TRUE. Clients that select any type of paged pool as PoolType must set DMF_MODULE_ATTRIBUTES.PassiveLevel = TRUE.
 * This Module does all the work of allocating the buffers and Requests as specified by the Client.
 * This Module stops and start streaming automatically during power transition.
 * This Module is similar to the USB Continuous Reader in WDF but for any WDFIOTARGET.

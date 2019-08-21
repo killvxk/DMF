@@ -67,6 +67,9 @@
     <ClCompile Include="..\..\Framework\Modules.Core\Dmf_RingBuffer.c">
       <Filter>Modules\Buffers</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Framework\DmfInterfaceInternal.c">
+      <Filter>Framework</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\Framework\DmfTrace.h">

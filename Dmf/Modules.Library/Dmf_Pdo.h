@@ -20,6 +20,51 @@ Environment:
 
 #pragma once
 
+// Holds information for a single device property.
+//
+typedef struct
+{
+    // The device property data that can be set on the SID driver.
+    //
+    WDF_DEVICE_PROPERTY_DATA DevicePropertyData;
+    
+    // The property type.
+    //
+    DEVPROPTYPE ValueType;
+    
+    // The value data for this property.
+    //
+    VOID* ValueData;
+
+    // The size of the value data.
+    //
+    ULONG ValueSize;
+    
+    // BOOL to specify if we should register the device interface GUID.
+    //
+    BOOLEAN RegisterDeviceInterface;
+
+    // Device interface GUID that will be set on this property, so that
+    // we can retrieve the properties at runtime with the CM API's.
+    // 
+    GUID* DeviceInterfaceGuid;
+} Pdo_DevicePropertyEntry;
+
+
+// Holds information for a branch of registry entries which consist of one
+// or more registry entries under a single key.
+//
+typedef struct
+{
+    // The entries int he branch.
+    //
+    Pdo_DevicePropertyEntry* TableEntries;
+
+    // The number of entries in the branch.
+    //
+    ULONG ItemCount;
+} Pdo_DeviceProperty_Table;
+
 // Allows Client to indicate if the that is about to be created PDO is required.
 //
 typedef
@@ -115,6 +160,10 @@ typedef struct
     // The callback function that instantiates DMF Modules, if applicable.
     //
     PFN_DMF_DEVICE_MODULES_ADD EvtDmfDeviceModulesAdd;
+
+    // The table entry for this device's properties.
+    //
+    Pdo_DeviceProperty_Table* DeviceProperties;
 } PDO_RECORD;
 
 // Client uses this structure to configure the Module specific parameters.
@@ -188,6 +237,15 @@ DMF_Pdo_DevicePlug(
     _In_ USHORT CompatibleIdsCount,
     _In_ PWSTR Description,
     _In_ ULONG SerialNumber,
+    _Out_opt_ WDFDEVICE* Device
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSTATUS
+DMF_Pdo_DevicePlugEx(
+    _In_ DMFMODULE DmfModule,
+    _In_ PDO_RECORD* PdoRecord,
     _Out_opt_ WDFDEVICE* Device
     );
 

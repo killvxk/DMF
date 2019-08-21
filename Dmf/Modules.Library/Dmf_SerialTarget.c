@@ -21,6 +21,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -41,6 +42,9 @@ typedef struct
     // Underlying Device Target.
     //
     WDFIOTARGET IoTarget;
+    // Indicates the mode of ContinuousRequestTarget.
+    //
+    ContinuousRequestTarget_ModeType ContinuousRequestTargetMode;
     // Connection ID for serial peripheral.
     //
     LARGE_INTEGER PeripheralId;
@@ -255,7 +259,7 @@ Return Value:
     ntStatus = DMF_SerialTarget_StreamStart(*dmfModuleAddress);
     if (! NT_SUCCESS(ntStatus))
     {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_DeviceInterfaceTarget_StreamStart fails: ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_SerialTarget_StreamStart fails: ntStatus=%!STATUS!", ntStatus);
     }
 
 Exit:
@@ -691,6 +695,7 @@ SerialTarget_IoTargetDestroy(
     if (ModuleContext->IoTarget != NULL)
     {
         WdfIoTargetClose(ModuleContext->IoTarget);
+        DMF_ContinuousRequestTarget_IoTargetClear(ModuleContext->DmfModuleContinuousRequestTarget);
         WdfObjectDelete(ModuleContext->IoTarget);
         ModuleContext->IoTarget = NULL;
     }
@@ -700,7 +705,7 @@ SerialTarget_IoTargetDestroy(
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -730,8 +735,27 @@ DMF_SerialTarget_Open(
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
     ntStatus = SerialTarget_InitializeSerialPort(DmfModule);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "SerialTarget_InitializeSerialPort fails: ntStatus=%!STATUS!", ntStatus);
+        goto Exit;
+    }
+
+    if (moduleContext->ContinuousRequestTargetMode == ContinuousRequestTarget_Mode_Automatic)
+    {
+        // By calling this function here, callbacks at the Client will happen only after the Module is open.
+        //
+        ASSERT(moduleContext->DmfModuleContinuousRequestTarget != NULL);
+        ntStatus = DMF_ContinuousRequestTarget_Start(moduleContext->DmfModuleContinuousRequestTarget);
+        if (!NT_SUCCESS(ntStatus))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ContinuousRequestTarget_Start fails: ntStatus=%!STATUS!", ntStatus);
+        }
+    }
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+Exit:
 
     return ntStatus;
 }
@@ -753,9 +777,20 @@ DMF_SerialTarget_Close(
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
-    // Close the associated target.
-    //
-    SerialTarget_IoTargetDestroy(moduleContext);
+    if (moduleContext->IoTarget != NULL)
+    {
+        if (moduleContext->ContinuousRequestTargetMode == ContinuousRequestTarget_Mode_Automatic)
+        {
+            // By calling this function here, callbacks at the Client will happen only before the Module is closed.
+            //
+            ASSERT(moduleContext->DmfModuleContinuousRequestTarget != NULL);
+            DMF_ContinuousRequestTarget_StopAndWait(moduleContext->DmfModuleContinuousRequestTarget);
+        }
+
+        // Close the associated target.
+        //
+        SerialTarget_IoTargetDestroy(moduleContext);
+    }
 
     FuncExitVoid(DMF_TRACE);
 }
@@ -928,18 +963,14 @@ Return Value:
                      &moduleAttributes,
                      WDF_NO_OBJECT_ATTRIBUTES,
                      &moduleContext->DmfModuleContinuousRequestTarget);
+    
+    // Remember Client's choice so this Module can start/stop streaming appropriately.
+    //
+    moduleContext->ContinuousRequestTargetMode = moduleConfig->ContinuousRequestTargetModuleConfig.ContinuousRequestTargetMode;
 
     FuncExitVoid(DMF_TRACE);
 }
 #pragma code_seg()
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_SerialTarget;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_SerialTarget;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -976,30 +1007,55 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_SerialTarget;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_SerialTarget;
+    DMF_CONFIG_SerialTarget* moduleConfig;
+    DmfModuleOpenOption openOption;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_SerialTarget);
-    DmfCallbacksDmf_SerialTarget.DeviceOpen = DMF_SerialTarget_Open;
-    DmfCallbacksDmf_SerialTarget.DeviceClose = DMF_SerialTarget_Close;
-    DmfCallbacksDmf_SerialTarget.DeviceResourcesAssign = DMF_SerialTarget_ResourcesAssign;
-    DmfCallbacksDmf_SerialTarget.ChildModulesAdd = DMF_SerialTarget_ChildModulesAdd;
+    moduleConfig = (DMF_CONFIG_SerialTarget*)DmfModuleAttributes->ModuleConfigPointer;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_SerialTarget,
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_SerialTarget);
+    dmfCallbacksDmf_SerialTarget.DeviceOpen = DMF_SerialTarget_Open;
+    dmfCallbacksDmf_SerialTarget.DeviceClose = DMF_SerialTarget_Close;
+    dmfCallbacksDmf_SerialTarget.DeviceResourcesAssign = DMF_SerialTarget_ResourcesAssign;
+    dmfCallbacksDmf_SerialTarget.ChildModulesAdd = DMF_SerialTarget_ChildModulesAdd;
+
+    // SerialTarget support multiple open option configurations. 
+    // Choose the open option based on Module config. 
+    //
+    switch (moduleConfig->ModuleOpenOption)
+    {
+    case SerialTarget_OpenOption_PrepareHardware:
+        openOption = DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware;
+        break;
+    case SerialTarget_OpenOption_D0EntrySystemPowerUp:
+        openOption = DMF_MODULE_OPEN_OPTION_OPEN_D0EntrySystemPowerUp;
+        break;
+    case SerialTarget_OpenOption_D0Entry:
+        openOption = DMF_MODULE_OPEN_OPTION_OPEN_D0Entry;
+        break;
+    default:
+        ASSERT(FALSE);
+        openOption = DMF_MODULE_OPEN_OPTION_Invalid;
+        break;
+    }
+
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_SerialTarget,
                                             SerialTarget,
                                             DMF_CONTEXT_SerialTarget,
                                             DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM,
-                                            DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
+                                            openOption);
 
-    DmfModuleDescriptor_SerialTarget.CallbacksDmf = &DmfCallbacksDmf_SerialTarget;
-    DmfModuleDescriptor_SerialTarget.ModuleConfigSize = sizeof(DMF_CONFIG_SerialTarget);
+    dmfModuleDescriptor_SerialTarget.CallbacksDmf = &dmfCallbacksDmf_SerialTarget;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_SerialTarget,
+                                &dmfModuleDescriptor_SerialTarget,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -1043,8 +1099,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SerialTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SerialTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1081,8 +1137,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SerialTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SerialTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1105,7 +1161,7 @@ DMF_SerialTarget_Send(
     _In_ ContinuousRequestTarget_RequestType RequestType,
     _In_ ULONG RequestIoctl,
     _In_ ULONG RequestTimeoutMilliseconds,
-    _In_opt_ EVT_DMF_ContinuousRequestTarget_SingleAsynchronousBufferOutput* EvtContinuousRequestTargetSingleAsynchronousRequest,
+    _In_opt_ EVT_DMF_ContinuousRequestTarget_SendCompletion* EvtContinuousRequestTargetSingleAsynchronousRequest,
     _In_opt_ VOID* SingleAsynchronousRequestClientContext
     )
 /*++
@@ -1139,8 +1195,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SerialTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SerialTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1205,8 +1261,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SerialTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SerialTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1254,8 +1310,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SerialTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SerialTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1268,7 +1324,7 @@ Return Value:
     return ntStatus;
 }
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_SerialTarget_StreamStop(
     _In_ DMFMODULE DmfModule
@@ -1285,7 +1341,7 @@ Arguments:
 
 Return Value:
 
-    VOID.
+    None
 
 --*/
 {
@@ -1293,8 +1349,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SerialTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SerialTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

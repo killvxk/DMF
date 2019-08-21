@@ -22,6 +22,7 @@ Environment:
 
 // DMF.
 //
+#include "DmfModule.h"
 #include "DmfModules.Core.h"
 #include "DmfModules.Core.Trace.h"
 #include "Dmf_Bridge.h"
@@ -79,6 +80,9 @@ typedef enum
     // The Module has been opened during D0Entry (and not cleaned up).
     //
     ModuleOpenedDuringType_D0Entry,
+    // The Module has been opened during D0Entry during system power up (and not cleaned up).
+    //
+    ModuleOpenedDuringType_D0EntrySystemPowerUp,
     ModuleOpenedDuringType_Maximum
 } ModuleOpenedDuringType;
 
@@ -154,7 +158,7 @@ struct _DMF_OBJECT_
     VOID* ModuleContext;
     // Reference counter for DMF Object references.
     //
-    LONG ReferenceCount;
+    volatile LONG ReferenceCount;
     // Associated WDF Device.
     //
     WDFDEVICE ParentDevice;
@@ -193,6 +197,9 @@ struct _DMF_OBJECT_
     // DMF Module Descriptor.
     //
     DMF_MODULE_DESCRIPTOR ModuleDescriptor;
+    // DMF Module Attributes.
+    //
+    DMF_MODULE_ATTRIBUTES ModuleAttributes;
     // DMF Module Callbacks (optional, set by Client).
     //
     DMF_MODULE_EVENT_CALLBACKS Callbacks;
@@ -208,18 +215,25 @@ struct _DMF_OBJECT_
     // Remember this Module is created directly by the Client, not part of a Collection.
     // It is important because it needs to be automatically closed prior to being destroyed.
     //
-    BOOLEAN DynamicModule;
+    BOOLEAN DynamicModuleImmediate;
     // List of this Module's Child Modules.
     //
     LIST_ENTRY ChildObjectList;
     // Number of Child Modules.
     //
     ULONG NumberOfChildModules;
+    // Collection of Interface Bindings where this Module is either the Transport or the Protocol.
+    //
+    // TODO: Check if a lock is needed to protect this?
+    //
+    WDFCOLLECTION InterfaceBindings;
+    // Spin Lock to protect access to InterfaceBindings.
+    //
+    WDFSPINLOCK InterfaceBindingsLock;
     // Transport Modules.
     // (NOTE: These are subset of ChildModulesVoid.)
     //
     DMF_OBJECT* TransportModule;
-    BOOLEAN SetTransportMode;
     // Parent Module.
     //
     DMF_OBJECT* DmfObjectParent;
@@ -233,6 +247,15 @@ struct _DMF_OBJECT_
     // Stores the Module's In Flight Recorder handle.
     //
     RECORDER_LOG InFlightRecorder;
+    // Client Cleanup Callback (chained).
+    //
+    PFN_WDF_OBJECT_CONTEXT_CLEANUP ClientEvtCleanupCallback;
+    // Indicates this Module is a Transport.
+    //
+    BOOLEAN IsTransport;
+    // Transport Interface GUID for validation.
+    //
+    GUID DesiredTransportInterfaceGuid;
 };
 
 // DMF Object Signature.
@@ -253,6 +276,9 @@ typedef struct
     // This is the Child Module to be returned at the next iteration.
     //
     LIST_ENTRY* NextChildObjectListEntry;
+    // This is the Child Module to be returned at the next iteration.
+    //
+    LIST_ENTRY* PreviousChildObjectListEntry;
 } CHILD_OBJECT_INTERATION_CONTEXT;
 
 // The DMF Module Collection contains information about all the instantiated
@@ -288,7 +314,47 @@ struct _DMF_MODULE_COLLECTION_
     // Flags indicating if modules implement WDF callbacks.
     //
     DMF_CALLBACKS_WDF_CHECK DmfCallbacksWdfCheck;
+
+    // Indicates that Client invoked Create callbacks manually.
+    // It is necessary for the case where Module Collection Cleanup callback
+    // is called, but the Client has not had a chance to call the corresponding
+    // Destroy callback. (The Client cannot do so in its parent object Cleanup
+    // callback as that happens after the Module Collection is destroyed since
+    // the Module Collection's Cleanup callback is called first by WDF.
+    //
+    BOOLEAN ManualDestroyCallbackIsPending;
+    WDFDEVICE ClientDevice;
 };
+
+// Represents a binding between Protocol and Transport.
+//
+typedef struct _DMF_INTERFACE_OBJECT
+{
+    // Transport Module.
+    //
+    DMFMODULE TransportModule;
+    // Protocol Module.
+    //
+    DMFMODULE ProtocolModule;
+    // Transport Module's Descriptor.
+    //
+    DMF_INTERFACE_TRANSPORT_DESCRIPTOR* TransportDescriptor;
+    // Protocol Module's Descriptor.
+    //
+    DMF_INTERFACE_PROTOCOL_DESCRIPTOR* ProtocolDescriptor;
+    // State of this Interface.
+    //
+    InterfaceStateType InterfaceState;
+    // Reference counter for this Interface.
+    //
+    LONG ReferenceCount;
+    // Lock to protect accesses to this structure.
+    //
+    WDFSPINLOCK InterfaceLock;
+    // WDF Object corresponding to DMF_INTERFACE_OBJECT.
+    //
+    DMFINTERFACE DmfInterface;
+} DMF_INTERFACE_OBJECT;
 
 typedef struct _DMF_DEVICE_CONTEXT
 {
@@ -296,7 +362,7 @@ typedef struct _DMF_DEVICE_CONTEXT
     //
     WDFDEVICE WdfDevice;
 
-    // Flag to indicate if Client driver implements
+    // Flag to indicate if Client Driver implements
     // an EVT_WDF_DRIVER_DEVICE_ADD callback.
     //
     BOOLEAN ClientImplementsEvtWdfDriverDeviceAdd;
@@ -310,12 +376,12 @@ typedef struct _DMF_DEVICE_CONTEXT
     //
     WDFDEVICE WdfControlDevice;
 
-    // Client driver device.
+    // Client Driver device.
     // Same as WdfDevice for non-Control device.
     //
     WDFDEVICE WdfClientDriverDevice;
 
-    // Indicates that the Client driver is a Filter driver.
+    // Indicates that the Client Driver is a Filter driver.
     //
     BOOLEAN IsFilterDevice;
 } DMF_DEVICE_CONTEXT;
@@ -339,10 +405,10 @@ typedef struct
         // in the collection.
         //
         WDFCOLLECTION ListOfConfigs;
-        // Has the Client driver initialized a BranchTrack Module?
+        // Has the Client Driver initialized a BranchTrack Module?
         //
         BOOLEAN BranchTrackEnabled;
-        // Has the Client driver initialized a LiveKernelDump Module?
+        // Has the Client Driver initialized a LiveKernelDump Module?
         //
         BOOLEAN LiveKernelDumpEnabled;
         // Parent WDFDEVICE (The Client Driver's WDFDEVICE.)
@@ -351,6 +417,11 @@ typedef struct
         // Parent DMFMODULE.
         //
         DMFMODULE ParentDmfModule;
+        // Indicates that it is a Transport Module. This field will be copied to the
+        // individual Module Attributes like other fields from this structure are
+        // prior to the Module being created.
+        //
+        BOOLEAN IsTransportModule;
     } DmfPrivate;
 
     // These can be set by Client.
@@ -469,17 +540,10 @@ DMF_ModuleLiveKernelDump_ModuleCollectionInitialize(
 // DmfHelpers.h
 //
 
-BOOLEAN
-DMF_IsTopParentDynamicModule(
-    _In_ DMF_OBJECT* DmfObject
-    );
-
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 DMF_SynchronizationCreate(
     _In_ DMF_OBJECT* DmfObject,
-    _In_ WDFDEVICE ParentDevice,
-    _In_ DMF_MODULE_DESCRIPTOR* ModuleDescriptor,
     _In_ BOOLEAN PassiveLevel
     );
 
@@ -590,6 +654,24 @@ DMF_RequestPassthruWithCompletion(
 
 // DmfInternal.h
 //
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_ModuleTreeDestroy(
+    _In_ DMFMODULE DmfModule
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_ModuleDestroy(
+    _In_ DMFMODULE DmfModule,
+    _In_ BOOLEAN DeleteMemory
+    );
+
+VOID
+DMF_ModuleInterfacesUnbind(
+    _In_ DMFMODULE DmfModule
+    );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
@@ -866,6 +948,20 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 EVT_DMF_MODULE_Generic_OnDeviceNotificationClose(
     _In_ DMFMODULE DmfModule
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_Generic_PostBind(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_Generic_PreUnbind(
+    _In_ DMFINTERFACE DmfInterface
     );
 
 VOID
@@ -1262,6 +1358,48 @@ Routine Description:
 }
 
 __forceinline
+DMF_INTERFACE_OBJECT*
+DMF_InterfaceToObject(
+    _In_ DMFINTERFACE DmfInterface
+    )
+/*++
+
+Routine Description:
+
+    Converts the DMFINTERFACE (which is a really a WDFMEMORY object)
+    to its corresponding internal DMF_INTERFACE_OBJECT pointer.
+
+--*/
+{
+    DMF_INTERFACE_OBJECT* dmfInterfaceObject;
+
+    ASSERT(DmfInterface != NULL);
+
+    dmfInterfaceObject = (DMF_INTERFACE_OBJECT*)WdfMemoryGetBuffer((WDFMEMORY)DmfInterface,
+                                                                    NULL);
+    ASSERT(dmfInterfaceObject != NULL);
+
+    return dmfInterfaceObject;
+}
+
+__forceinline
+DMFINTERFACE
+DMF_ObjectToInterface(
+    _In_ DMF_INTERFACE_OBJECT* DmfInterfaceObject
+    )
+/*++
+
+Routine Description:
+
+    Converts the internal DMF_INTERFACE_OBJECT pointer to its corresponding DMFINTERFACE.
+
+--*/
+{
+    ASSERT(DmfInterfaceObject != NULL);
+    return (DMFINTERFACE)DmfInterfaceObject->DmfInterface;
+}
+
+__forceinline
 BOOLEAN
 DMF_IsObjectTypeOpenNotify(
     _In_ DMF_OBJECT* DmfObject
@@ -1361,25 +1499,25 @@ DMF_ModuleWaitForReferenceCountToClear(
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_ContainerPnpPowerCallbacksInit(
-    _Inout_ PWDF_PNPPOWER_EVENT_CALLBACKS PnpPowerEventCallbacks
+    _Out_ WDF_PNPPOWER_EVENT_CALLBACKS* PnpPowerEventCallbacks
     );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_ContainerPowerPolicyCallbacksInit(
-    _Inout_ PWDF_POWER_POLICY_EVENT_CALLBACKS PowerPolicyCallbacks
+    _Out_ WDF_POWER_POLICY_EVENT_CALLBACKS* PowerPolicyCallbacks
     );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_ContainerFileObjectConfigInit(
-    _Out_ PWDF_FILEOBJECT_CONFIG FileObjectConfig
+    _Out_ WDF_FILEOBJECT_CONFIG* FileObjectConfig
     );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_ContainerQueueConfigCallbacksInit(
-    _Inout_ PWDF_IO_QUEUE_CONFIG IoQueueConfig
+    _Out_ WDF_IO_QUEUE_CONFIG* IoQueueConfig
     );
 
 // DmfDeviceInit.c

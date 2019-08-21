@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Core.h"
 #include "DmfModules.Core.Trace.h"
 
@@ -118,7 +119,6 @@ DMF_MODULE_DECLARE_CONFIG(LiveKernelDump)
 //
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
-_Must_inspect_result_
 NTSTATUS
 LiveKernelDump_DataBufferSourceAdd(
     _In_ DMFMODULE DmfModule,
@@ -973,14 +973,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_LiveKernelDump;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_LiveKernelDump;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -1003,7 +995,7 @@ Routine Description:
 
 Arguments:
 
-    Device - Client driver's WDFDEVICE object.
+    Device - Client Driver's WDFDEVICE object.
     DmfModuleAttributes - Opaque structure that contains parameters DMF needs to initialize the Module.
     ObjectAttributes - WDF object attributes for DMFMODULE.
     DmfModule - Address of the location where the created DMFMODULE handle is returned.
@@ -1015,28 +1007,29 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_LiveKernelDump;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_LiveKernelDump;
 
     PAGED_CODE();
 
     ntStatus = STATUS_SUCCESS;
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_LiveKernelDump);
-    DmfCallbacksDmf_LiveKernelDump.ChildModulesAdd = DMF_LiveKernelDump_ChildModulesAdd;
-    DmfCallbacksDmf_LiveKernelDump.DeviceOpen = DMF_LiveKernelDump_Open;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_LiveKernelDump);
+    dmfCallbacksDmf_LiveKernelDump.ChildModulesAdd = DMF_LiveKernelDump_ChildModulesAdd;
+    dmfCallbacksDmf_LiveKernelDump.DeviceOpen = DMF_LiveKernelDump_Open;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_LiveKernelDump,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_LiveKernelDump,
                                             LiveKernelDump,
                                             DMF_CONTEXT_LiveKernelDump,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_LiveKernelDump.CallbacksDmf = &DmfCallbacksDmf_LiveKernelDump;
-    DmfModuleDescriptor_LiveKernelDump.ModuleConfigSize = sizeof(DMF_CONFIG_LiveKernelDump);
+    dmfModuleDescriptor_LiveKernelDump.CallbacksDmf = &dmfCallbacksDmf_LiveKernelDump;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_LiveKernelDump,
+                                &dmfModuleDescriptor_LiveKernelDump,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -1053,7 +1046,6 @@ Exit:
 #pragma code_seg()
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
-_Must_inspect_result_
 NTSTATUS
 DMF_LiveKernelDump_DataBufferSourceAdd(
     _In_ DMFMODULE DmfModule,
@@ -1095,8 +1087,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_LiveKernelDump);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 LiveKernelDump);
 
     ntStatus = LiveKernelDump_DataBufferSourceAdd(DmfModule,
                                                   Buffer,
@@ -1147,8 +1139,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_LiveKernelDump);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 LiveKernelDump);
 
     LiveKernelDump_DataBufferSourceRemove(DmfModule,
                                           Buffer,
@@ -1225,8 +1217,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_LiveKernelDump);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 LiveKernelDump);
 
 #if IS_WIN10_RS3_OR_LATER
 

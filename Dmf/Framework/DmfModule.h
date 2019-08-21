@@ -21,6 +21,11 @@ Environment:
 
 #pragma once
 
+// Place this here so that all GUIDs defined by Modules can be compiled
+// and linked without Client Driver needing to include this file.
+//
+#include <initguid.h>
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Client facing definitions. These are also needed by Modules.
@@ -41,6 +46,9 @@ WDF_DECLARE_CUSTOM_TYPE(DMFMODULE_TYPE);
 // Declare DMFCOLLECTION custom handle type as DMFCOLLECTION_TYPE.
 //
 WDF_DECLARE_CUSTOM_TYPE(DMFCOLLECTION_TYPE);
+// Declare DMFINTERFACE custom handle type as DMFINTERFACE_TYPE.
+//
+WDF_DECLARE_CUSTOM_TYPE(DMFINTERFACE_TYPE);
 // So we can set this pointer in various objects.
 //
 WDF_DECLARE_CONTEXT_TYPE(DMFMODULE);
@@ -418,9 +426,15 @@ DMF_##ModuleName##_LiveKernelDumpInitialize(_In_ DMFMODULE DmfModule)           
 }                                                                                               \
                                                                                                 \
 
+// When a Module has no Config, declare a dummy Config that is not used by Module or Clients,
+// but makes it possible to easily set the size of the Config to a valid value.
+//
 #define DMF_MODULE_DECLARE_NO_CONFIG(ModuleName)                                                \
+typedef struct                                                                                  \
+{                                                                                               \
+    VOID* UnusedElement;                                                                        \
+} DMF_CONFIG_##ModuleName##;                                                                    \
                                                                                                 \
-
 
 // These are DMF specific Module callbacks.
 //
@@ -552,6 +566,9 @@ typedef enum
     // Call DMF_Module_RegisterNotification() in EvtPrepareHardware.
     //
     DMF_MODULE_OPEN_OPTION_NOTIFY_PrepareHardware,
+    // Call DMF_ModuleOpen() in EvtD0Entry during system power up.
+    //
+    DMF_MODULE_OPEN_OPTION_OPEN_D0EntrySystemPowerUp,
     // Call DMF_ModuleOpen() in EvtD0Entry.
     //
     DMF_MODULE_OPEN_OPTION_OPEN_D0Entry,
@@ -569,6 +586,10 @@ typedef enum
     DMF_MODULE_OPEN_OPTION_LAST,
 } DmfModuleOpenOption;
 
+typedef NTSTATUS DMF_WdfAddCustomType(_In_ WDFOBJECT Handle,
+                                      _In_opt_ ULONG_PTR Data,
+                                      _In_opt_ PFN_WDF_OBJECT_CONTEXT_CLEANUP EvtCleanupCallback,
+                                      _In_opt_ PFN_WDF_OBJECT_CONTEXT_DESTROY EvtDestroyCallback);
 // Module Descriptor.
 //
 typedef struct
@@ -607,53 +628,77 @@ typedef struct
     // Number of additional locks needed for the Module (optional).
     //
     ULONG NumberOfAuxiliaryLocks;
-    // Wdf Object attributes specifying Module Context details.
+    // WDF Object attributes specifying Module Context details.
     //
     PWDF_OBJECT_ATTRIBUTES ModuleContextAttributes;
     // In Flight Recorder Size.
     // If the Module sets this to 0, its logs will be part of the default recorder buffer.
     //
     ULONG InFlightRecorderSize;
+    // Transport Interface GUID supported by this Module on upper layer.
+    //
+    GUID SupportedTransportInterfaceGuid;
+    // Transport Interface GUID required by this Module on upper layer.
+    // (This field is mandatory when DMF_MODULE_OPTIONS_TRANSPORT_REQUIRED is set.)
+    //
+    GUID RequiredTransportInterfaceGuid;
+    // When a Module is created, a custom type is assigned to the handle using
+    // this method.
+    //
+    DMF_WdfAddCustomType* WdfAddCustomType;
 } DMF_MODULE_DESCRIPTOR;
 
-#define DMF_MODULE_DESCRIPTOR_INIT(Descriptor, Name, Module_Options, Open_Option)      \
-                                                                                       \
-RtlZeroMemory(&Descriptor,                                                             \
-              sizeof(DMF_MODULE_DESCRIPTOR));                                          \
-                                                                                       \
-Descriptor.Size                            = sizeof(DMF_MODULE_DESCRIPTOR);            \
-Descriptor.ModuleName                      = ""#Name;                                  \
-Descriptor.ModuleOptions                   = Module_Options;                           \
-Descriptor.OpenOption                      = Open_Option;                              \
-Descriptor.ModuleConfigSize                = 0;                                        \
-Descriptor.ModuleBranchTrackInitialize     = NULL;                                     \
-Descriptor.NumberOfAuxiliaryLocks          = 0;                                        \
-Descriptor.CallbacksDmf                    = NULL;                                     \
-Descriptor.CallbacksWdf                    = NULL;                                     \
-Descriptor.ModuleLiveKernelDumpInitialize  = DMF_##Name##_LiveKernelDumpInitialize;    \
-Descriptor.ModuleContextAttributes         = WDF_NO_OBJECT_ATTRIBUTES;                 \
-                                                                                       \
+#define DMF_MODULE_DESCRIPTOR_INIT(Descriptor, Name, Module_Options, Open_Option)           \
+                                                                                            \
+RtlZeroMemory(&Descriptor,                                                                  \
+              sizeof(DMF_MODULE_DESCRIPTOR));                                               \
+                                                                                            \
+Descriptor.Size                            = sizeof(DMF_MODULE_DESCRIPTOR);                 \
+Descriptor.ModuleName                      = ""#Name;                                       \
+Descriptor.ModuleOptions                   = Module_Options;                                \
+Descriptor.OpenOption                      = Open_Option;                                   \
+Descriptor.ModuleConfigSize                = sizeof(DMF_CONFIG_##Name##);                   \
+Descriptor.ModuleBranchTrackInitialize     = NULL;                                          \
+Descriptor.NumberOfAuxiliaryLocks          = 0;                                             \
+Descriptor.CallbacksDmf                    = NULL;                                          \
+Descriptor.CallbacksWdf                    = NULL;                                          \
+Descriptor.ModuleLiveKernelDumpInitialize  = DMF_##Name##_LiveKernelDumpInitialize;         \
+Descriptor.ModuleContextAttributes         = WDF_NO_OBJECT_ATTRIBUTES;                      \
+Descriptor.WdfAddCustomType                = WDF_ADD_CUSTOM_TYPE_FUNCTION_NAME(Name);       \
+                                                                                            \
 
-#define DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(Descriptor, Name, ModuleContext, Module_Options, Open_Option)   \
-                                                                                                                \
-WDF_OBJECT_ATTRIBUTES moduleContextAttributes;                                                                  \
-RtlZeroMemory(&Descriptor,                                                                                      \
-              sizeof(DMF_MODULE_DESCRIPTOR));                                                                   \
-WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&moduleContextAttributes,                                               \
-                                        ModuleContext);                                                         \
-                                                                                                                \
-Descriptor.Size                            = sizeof(DMF_MODULE_DESCRIPTOR);                                     \
-Descriptor.ModuleName                      = ""#Name;                                                           \
-Descriptor.ModuleOptions                   = Module_Options;                                                    \
-Descriptor.OpenOption                      = Open_Option;                                                       \
-Descriptor.ModuleConfigSize                = 0;                                                                 \
-Descriptor.ModuleBranchTrackInitialize     = NULL;                                                              \
-Descriptor.NumberOfAuxiliaryLocks          = 0;                                                                 \
-Descriptor.CallbacksDmf                    = NULL;                                                              \
-Descriptor.CallbacksWdf                    = NULL;                                                              \
-Descriptor.ModuleLiveKernelDumpInitialize  = DMF_##Name##_LiveKernelDumpInitialize;                             \
-Descriptor.ModuleContextAttributes         = &moduleContextAttributes;                                          \
-                                                                                                                \
+#define DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(Descriptor, Name, ModuleContext, Module_Options, Open_Option)         \
+                                                                                                                      \
+WDF_OBJECT_ATTRIBUTES moduleContextAttributes;                                                                        \
+DMF_MODULE_DESCRIPTOR_INIT(Descriptor, Name, Module_Options, Open_Option)                                             \
+WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&moduleContextAttributes,                                                     \
+                                        ModuleContext);                                                               \
+Descriptor.ModuleContextAttributes         = &moduleContextAttributes;                                                \
+                                                                                                                      \
+
+// Method to initialize Protocol descriptor.
+//
+VOID
+DMF_INTERFACE_PROTOCOL_DESCRIPTOR_INIT_INTERNAL(
+    _Out_ DMF_INTERFACE_PROTOCOL_DESCRIPTOR* DmfProtocolDescriptor,
+    _In_ PSTR InterfaceName,
+    _In_ ULONG DeclarationDataSize,
+    _In_ EVT_DMF_INTERFACE_ProtocolBind* EvtProtocolBind,
+    _In_ EVT_DMF_INTERFACE_ProtocolUnbind* EvtProtocolUnbind,
+    _In_opt_ EVT_DMF_INTERFACE_PostBind* EvtPostBind,
+    _In_opt_ EVT_DMF_INTERFACE_PreUnbind* EvtPreUnbind
+    );
+
+// Method to initialize Transport descriptor.
+//
+VOID
+DMF_INTERFACE_TRANSPORT_DESCRIPTOR_INIT_INTERNAL(
+    _Out_ DMF_INTERFACE_TRANSPORT_DESCRIPTOR* DmfTransportDescriptor,
+    _In_ PSTR InterfaceName,
+    _In_ ULONG DeclarationDataSize,
+    _In_opt_ EVT_DMF_INTERFACE_PostBind* EvtPostBind,
+    _In_opt_ EVT_DMF_INTERFACE_PreUnbind* EvtPreUnbind
+);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
@@ -664,12 +709,6 @@ DMF_ModuleCreate(
     _In_ PWDF_OBJECT_ATTRIBUTES DmfModuleObjectAttributes,
     _In_ DMF_MODULE_DESCRIPTOR* ModuleDescriptor,
     _Out_ DMFMODULE* DmfModule
-    );
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-VOID
-DMF_ModuleDestroy(
-    _In_ DMFMODULE DmfModule
     );
 
 NTSTATUS
@@ -754,6 +793,18 @@ DMF_ModuleConfigGet(
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
+BOOLEAN
+DMF_IsModuleDynamic(
+    _In_ DMFMODULE DmfModule
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+BOOLEAN
+DMF_IsModulePassiveLevel(
+    _In_ DMFMODULE DmfModule
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 NTSTATUS
 DMF_ModuleReference(
@@ -824,24 +875,39 @@ DMF_ObjectValidate(
 
 VOID
 DMF_HandleValidate_ModuleMethod(
-    _In_ DMFMODULE DmfModule,
-    _In_ DMF_MODULE_DESCRIPTOR* DmfModuleDescriptor
+    _In_ DMFMODULE DmfModule
     );
 
+#define DMFMODULE_VALIDATE_IN_METHOD(ModuleHandle, ModuleType)                                  \
+                                                                                                \
+     (! WdfObjectIsCustomType(ModuleHandle, ModuleType)) ?                                      \
+              (ASSERT(FALSE)) :                                                                 \
+              (DMF_HandleValidate_ModuleMethod(ModuleHandle))                                   \
+			  
 // These two validation functions are deprecated
 // Do not use it.
 //
 VOID
 DMF_HandleValidate_OpeningOk(
-    _In_ DMFMODULE DmfModule,
-    _In_ DMF_MODULE_DESCRIPTOR* DmfModuleDescriptor
+    _In_ DMFMODULE DmfModule
     );
 
+#define DMFMODULE_VALIDATE_IN_METHOD_OPENING_OK(ModuleHandle, ModuleType)                       \
+                                                                                                \
+    (! WdfObjectIsCustomType(ModuleHandle, ModuleType)) ?                                       \
+              (ASSERT(FALSE)) :                                                                 \
+              (DMF_HandleValidate_OpeningOk(ModuleHandle))                                      \
+			  
 VOID
 DMF_HandleValidate_ClosingOk(
-    _In_ DMFMODULE DmfModule,
-    _In_ DMF_MODULE_DESCRIPTOR* DmfModuleDescriptor
+    _In_ DMFMODULE DmfModule
     );
+	
+#define DMFMODULE_VALIDATE_IN_METHOD_CLOSING_OK(ModuleHandle, ModuleType)                       \
+                                                                                                \
+    (! WdfObjectIsCustomType(ModuleHandle, ModuleType)) ?                                       \
+              (ASSERT(FALSE)) :                                                                 \
+              (DMF_HandleValidate_ClosingOk(ModuleHandle))                                      \
 
 __forceinline
 DMFMODULE

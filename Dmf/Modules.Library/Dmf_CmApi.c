@@ -9,7 +9,7 @@ Module Name:
 
 Abstract:
 
-    Support for Cm Apis.
+    Support for Cm Api.
 
 Environment:
 
@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -55,6 +56,8 @@ DMF_MODULE_DECLARE_CONFIG(CmApi)
 // DMF Module Support Code
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
+
+#include <devpkey.h>
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -116,7 +119,7 @@ Return Value:
 
         // Add two characters for forced double null termination.
         //
-        bufferPointer = (WCHAR*)malloc((cmListSize + 2) * sizeof(WCHAR));
+        bufferPointer = (WCHAR*)malloc((cmListSize + (size_t)2) * sizeof(WCHAR));
 
         if (bufferPointer != NULL)
         {
@@ -219,8 +222,96 @@ Return Value:
     return (DWORD)ntStatus;
 }
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+BOOLEAN 
+CmApi_FirstParentInterfaceOpen(
+    _In_ DMFMODULE DmfModule,
+    _In_ ULONG InterfaceIndex,
+    _In_ WCHAR* InterfaceName,
+    _In_ UNICODE_STRING* SymbolicLinkName,
+    _In_ VOID* ClientContext
+    )
+/*++
+
+Routine Description:
+
+    Called by DMF_CmApi_ParentTargetCreateAndOpen in order to receive the symbolic name each interface
+    associated with the Parent PDO. When this callback is called, it creates and opens the WDFIOTARGET
+    associated with the Parent PDO.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    InterfaceIndex - The index of the enumerated interface.
+    InterfaceName - The name of the enumerated interface.
+    SymbolicLinkName - The symbolic link name of the enumerated interface.
+    ClientContext - The returned WDFIOTARGET of the associated Parent PDO.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    WDFIOTARGET ioTarget;
+    WDF_IO_TARGET_OPEN_PARAMS openParams;
+    WDFIOTARGET* wdfIoTarget;
+    WDFDEVICE device;
+
+    UNREFERENCED_PARAMETER(InterfaceIndex);
+    UNREFERENCED_PARAMETER(InterfaceName);
+
+    device = DMF_ParentDeviceGet(DmfModule);
+
+    wdfIoTarget = (WDFIOTARGET*)ClientContext;
+
+    WDF_IO_TARGET_OPEN_PARAMS_INIT_OPEN_BY_NAME(&openParams,
+                                                SymbolicLinkName,
+                                                GENERIC_READ| GENERIC_WRITE);
+    openParams.ShareAccess = FILE_SHARE_READ | FILE_SHARE_WRITE;
+
+    // Create an I/O target object.
+    //
+    ntStatus = WdfIoTargetCreate(device,
+                                 WDF_NO_OBJECT_ATTRIBUTES,
+                                 &ioTarget);
+    if (! NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, 
+                    DMF_TRACE, 
+                    "WdfIoTargetCreate fails: ntStatus=%!STATUS!", 
+                    ntStatus);
+        goto Exit;
+    }
+
+    ntStatus = WdfIoTargetOpen(ioTarget,
+                               &openParams);
+    if (! NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, 
+                    DMF_TRACE, 
+                    "WdfIoTargetOpen fails: ntStatus=%!STATUS!", 
+                    ntStatus);
+        
+        WdfObjectDelete(ioTarget);
+        goto Exit;
+    }
+
+    ASSERT(ioTarget != NULL);
+    *wdfIoTarget = ioTarget;
+
+Exit:
+    ;
+
+    // Just open the first instance.
+    //
+    return FALSE;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -258,38 +349,50 @@ Return Value:
     DMF_CONFIG_CmApi* moduleConfig;
     CM_NOTIFY_FILTER cmNotifyFilter;
     CONFIGRET configRet;
+    GUID nullGuid;
 
     PAGED_CODE();
     FuncEntry(DMF_TRACE);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
-
     moduleConfig = DMF_CONFIG_GET(DmfModule);
 
-    cmNotifyFilter.cbSize = sizeof(CM_NOTIFY_FILTER);
-    cmNotifyFilter.Flags = 0;
-    cmNotifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
-    cmNotifyFilter.u.DeviceInterface.ClassGuid = moduleConfig->DeviceInterfaceGuid;
-
-    configRet = CM_Register_Notification(&cmNotifyFilter,
-                                         (VOID*)DmfModule,
-                                         (PCM_NOTIFY_CALLBACK)CmApi_NotificationCallback,
-                                         &(moduleContext->DeviceInterfaceNotification));
-
-    // Target device might already be there . So try now.
-    // 
-    if (configRet == CR_SUCCESS)
+    RtlZeroMemory(&nullGuid,
+                  sizeof(GUID));
+    if (! DMF_Utility_IsEqualGUID(&nullGuid,
+                                  &moduleConfig->DeviceInterfaceGuid))
     {
-        CmApi_DeviceInterfaceListGet(DmfModule,
-                                     CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+        cmNotifyFilter.cbSize = sizeof(CM_NOTIFY_FILTER);
+        cmNotifyFilter.Flags = 0;
+        cmNotifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
+        cmNotifyFilter.u.DeviceInterface.ClassGuid = moduleConfig->DeviceInterfaceGuid;
 
-        ntStatus = STATUS_SUCCESS;
+        configRet = CM_Register_Notification(&cmNotifyFilter,
+                                             (VOID*)DmfModule,
+                                             (PCM_NOTIFY_CALLBACK)CmApi_NotificationCallback,
+                                             &(moduleContext->DeviceInterfaceNotification));
+
+        // Target device might already be there . So try now.
+        // 
+        if (configRet == CR_SUCCESS)
+        {
+            CmApi_DeviceInterfaceListGet(DmfModule,
+                                         CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+
+            ntStatus = STATUS_SUCCESS;
+        }
+        else
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "CM_Register_Notification fails: configRet=0x%x", configRet);
+            ntStatus = ERROR_NOT_FOUND;
+            goto Exit;
+        }
     }
     else
     {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "CM_Register_Notification fails: configRet=0x%x", configRet);
-        ntStatus = ERROR_NOT_FOUND;
-        goto Exit;
+        // It means Client wants to use other aspects of the Module unrelated to device interfaces.
+        //
+        ntStatus = STATUS_SUCCESS;
     }
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
@@ -338,14 +441,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_CmApi;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_CmApi;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -380,23 +475,24 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_CmApi;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_CmApi;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_CmApi);
-    DmfCallbacksDmf_CmApi.DeviceOpen = DMF_CmApi_Open;
-    DmfCallbacksDmf_CmApi.DeviceClose = DMF_CmApi_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_CmApi);
+    dmfCallbacksDmf_CmApi.DeviceOpen = DMF_CmApi_Open;
+    dmfCallbacksDmf_CmApi.DeviceClose = DMF_CmApi_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_CmApi,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_CmApi,
                                             CmApi,
                                             DMF_CONTEXT_CmApi,
                                             DMF_MODULE_OPTIONS_DISPATCH,
-                                            DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
+                                            DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_CmApi.CallbacksDmf = &DmfCallbacksDmf_CmApi;
-    DmfModuleDescriptor_CmApi.ModuleConfigSize = sizeof(DMF_CONFIG_CmApi);
+    dmfModuleDescriptor_CmApi.CallbacksDmf = &dmfCallbacksDmf_CmApi;
 
     // ObjectAttributes must be initialized and
     // ParentObject attribute must be set to either WDFDEVICE or DMFMODULE.
@@ -404,7 +500,7 @@ Return Value:
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_CmApi,
+                                &dmfModuleDescriptor_CmApi,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -460,8 +556,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_CmApi);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 CmApi);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
     ASSERT(DeviceInstanceId != NULL);
@@ -532,6 +628,7 @@ Exit:
 
     return returnValue;
 }
+#pragma code_seg()
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -548,7 +645,7 @@ DMF_CmApi_DeviceInstanceIdAndHardwareIdsGet(
 
 Routine Description:
 
-    Given the Id of an instance of a given device interface, return the list of hardware ids accociated with
+    Given the Id of an instance of a given device interface, return the list of hardware ids associated with
     with that instance.
 
 Arguments:
@@ -648,6 +745,755 @@ Exit:
 
     return ntStatus;
 }
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_ParentDevNodeGet(
+    _In_ DMFMODULE DmfModule,
+    _Out_ DEVINST* ParentDevNode,
+    _Out_ WCHAR* ParentDeviceInstanceId,
+    _In_ ULONG ParentDeviceInstanceIdBufferSize
+    )
+/*++
+
+Routine Description:
+
+    Given a DMFMODULE, retrieve its corresponding DEVINST and Instance Id.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    ParentDevNode - The returned DEVINST.
+    ParentDeviceInstanceId - The buffer where the corresponding Instance Id is written.
+    ParentDeviceInstanceIdBufferSize - The size of ParentDeviceInstanceId in bytes.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    CONFIGRET configRet;
+    DWORD lastError;
+    WDF_DEVICE_PROPERTY_DATA property;
+    DEVPROPTYPE propertyType;
+    WCHAR deviceInstanceId[MAX_DEVICE_ID_LEN];
+    ULONG requiredLength;
+    DEVINST devInst;
+    DEVINST parentDevInst;
+    PWSTR deviceInterfaceList;
+    ULONG deviceInterfaceListLength;
+    WDFDEVICE device;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 CmApi);
+
+    deviceInterfaceList = NULL;
+    deviceInterfaceListLength = 0;
+    device = DMF_ParentDeviceGet(DmfModule);
+
+    WDF_DEVICE_PROPERTY_DATA_INIT(&property, 
+                                  &DEVPKEY_Device_InstanceId);
+    propertyType = DEVPROP_TYPE_STRING;
+    ntStatus = WdfDeviceQueryPropertyEx(device,
+                                        &property,
+                                        sizeof(deviceInstanceId),
+                                        (PVOID)&deviceInstanceId,
+                                        &requiredLength,
+                                        &propertyType);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "WdfDeviceQueryPropertyEx fails: ntStatus=%!STATUS!",
+                    ntStatus);
+        goto Exit;
+    }
+
+    configRet = CM_Locate_DevNodeW(&devInst,
+                                   deviceInstanceId,
+                                   CM_LOCATE_DEVNODE_NORMAL);
+    if (CR_SUCCESS != configRet)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Locate_DevNodeW fails: Result=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    configRet = CM_Get_Parent(&parentDevInst,
+                              devInst, 
+                              CM_LOCATE_DEVNODE_NORMAL);
+    if (CR_SUCCESS != configRet)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Get_Parent fails: Result=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    *ParentDevNode = parentDevInst;
+
+    ULONG size = ParentDeviceInstanceIdBufferSize;
+    configRet = CM_Get_DevNode_PropertyW(parentDevInst,
+                                         &DEVPKEY_Device_InstanceId,
+                                         &propertyType,
+                                         (PBYTE)ParentDeviceInstanceId,
+                                         &size,
+                                         0);
+    if (CR_SUCCESS != configRet)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Get_DevNode_PropertyW fails: Result=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    ntStatus = STATUS_SUCCESS;
+
+Exit:
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_CmApi_ParentTargetCloseAndDestroy(
+    _In_ DMFMODULE DmfModule,
+    _In_ WDFIOTARGET ParentWdfIoTarget
+    )
+/*++
+
+Routine Description:
+
+    Closes and destroys a given WDFIOTARGET.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    ParentWdfIoTarget - The WDFIOTARGET to close and destroy.
+
+Return Value:
+
+    None
+
+--*/
+{
+    UNREFERENCED_PARAMETER(DmfModule);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    WdfIoTargetClose(ParentWdfIoTarget);
+    WdfObjectDelete(ParentWdfIoTarget);
+
+    FuncExitVoid(DMF_TRACE);
+}
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_ParentTargetCreateAndOpen(
+    _In_ DMFMODULE DmfModule,
+    _In_ GUID* GuidDevicePropertyInterface,
+    _Out_ WDFIOTARGET* ParentWdfIoTarget
+    )
+/*++
+
+Routine Description:
+
+    Finds the a parent device and creates/opens its associated WDFIOTARGET.
+    This function just looks for the first interface associated with the parent target.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    GuidDevicePropertyInterface - The device interface GUID to use.
+    ParentWdfIoTarget - The returned WDFIOTARGET.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 CmApi);
+
+    // Using uninitialized memory '*ParentWdfIoTarget'
+    //
+    #pragma warning(suppress:6001)
+    ntStatus = DMF_CmApi_ParentTargetInterfacesEnumerate(DmfModule,
+                                                         CmApi_FirstParentInterfaceOpen,
+                                                         GuidDevicePropertyInterface,
+                                                         ParentWdfIoTarget);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_CmApi_ParentTargetInterfacesEnumerate fails: ntStatus=%!STATUS!", ntStatus);
+        goto Exit;
+    }
+
+    if (*ParentWdfIoTarget == NULL)
+    {
+        ntStatus = STATUS_NOT_FOUND;
+        goto Exit;
+    }
+
+    ntStatus = STATUS_SUCCESS;
+
+Exit:
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_ParentTargetInterfacesEnumerate(
+    _In_ DMFMODULE DmfModule,
+    _In_ EVT_DMF_CmApi_ParentTargetSymbolicLinkName ParentTargetCallback,
+    _In_ GUID* GuidDevicePropertyInterface,
+    _Inout_ VOID* ClientContext
+    )
+/*++
+
+Routine Description:
+
+    Enumerates all the interfaces associated with the Parent PDO.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    ParentTargetCallback - Callback to Client for each interface instance enumerated.
+    GuidDevicePropertyInterface - The device interface GUID to find.
+    ClientContext - Client context passed to ParentTargetCallback.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    CONFIGRET configRet;
+    DWORD lastError;
+    WDF_DEVICE_PROPERTY_DATA property;
+    DEVPROPTYPE propertyType;
+    WCHAR deviceInstanceId[MAX_DEVICE_ID_LEN];
+    WCHAR parentDeviceInstanceId[MAX_DEVICE_ID_LEN];
+    ULONG requiredLength;
+    DEVINST devInst;
+    DEVINST parentDevInst;
+    PWSTR deviceInterfaceList;
+    ULONG deviceInterfaceListLength;
+    PWSTR currentInterface;
+    DWORD interfaceIndex;
+    WDFDEVICE device;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 CmApi);
+
+    deviceInterfaceList = NULL;
+    deviceInterfaceListLength = 0;
+    device = DMF_ParentDeviceGet(DmfModule);
+
+    WDF_DEVICE_PROPERTY_DATA_INIT(&property, 
+                                  &DEVPKEY_Device_InstanceId);
+    propertyType = DEVPROP_TYPE_STRING;
+    ntStatus = WdfDeviceQueryPropertyEx(device,
+                                        &property,
+                                        sizeof(deviceInstanceId),
+                                        (PVOID)&deviceInstanceId,
+                                        &requiredLength,
+                                        &propertyType);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "WdfDeviceQueryPropertyEx fails: ntStatus=%!STATUS!",
+                    ntStatus);
+        goto Exit;
+    }
+
+    configRet = CM_Locate_DevNodeW(&devInst,
+                                   deviceInstanceId,
+                                   CM_LOCATE_DEVNODE_NORMAL);
+    if (CR_SUCCESS != configRet)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Locate_DevNodeW fails: Result=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    configRet = CM_Get_Parent(&parentDevInst,
+                              devInst, 
+                              CM_LOCATE_DEVNODE_NORMAL);
+    if (CR_SUCCESS != configRet)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Get_Parent fails: Result=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    ULONG size = sizeof(parentDeviceInstanceId);
+    configRet = CM_Get_DevNode_PropertyW(parentDevInst,
+                                         &DEVPKEY_Device_InstanceId,
+                                         &propertyType,
+                                         (PBYTE)parentDeviceInstanceId,
+                                         &size,
+                                         0);
+    if (CR_SUCCESS != configRet)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Get_DevNode_PropertyW fails: Result=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    // Get the existing Device Interfaces for the given Guid.
+    // It is recommended to do this in a loop, as the
+    // size can change between the call to CM_Get_Device_Interface_List_Size and 
+    // CM_Get_Device_Interface_List.
+    //
+    do
+    {
+        configRet = CM_Get_Device_Interface_List_Size(&deviceInterfaceListLength,
+                                                      (LPGUID)GuidDevicePropertyInterface,
+                                                      parentDeviceInstanceId,
+                                                      CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+        if (configRet != CR_SUCCESS)
+        {
+            lastError = GetLastError();
+            TraceEvents(TRACE_LEVEL_ERROR,
+                        DMF_TRACE,
+                        "CM_Get_Device_Interface_List_Size fails: Result=%d lastError=%!WINERROR!",
+                        configRet,
+                        lastError);
+            ntStatus = NTSTATUS_FROM_WIN32(lastError);
+            goto Exit;
+        }
+
+        if (deviceInterfaceList != NULL)
+        {
+            if (!HeapFree(GetProcessHeap(),
+                          0,
+                          deviceInterfaceList))
+            {
+                lastError = GetLastError();
+                TraceEvents(TRACE_LEVEL_ERROR,
+                            DMF_TRACE,
+                            "HeapFree fails: lastError=%!WINERROR!",
+                            lastError);
+                ntStatus = NTSTATUS_FROM_WIN32(lastError);
+                deviceInterfaceList = NULL;
+                goto Exit;
+            }
+        }
+
+        deviceInterfaceList = (PWSTR)HeapAlloc(GetProcessHeap(),
+                                               HEAP_ZERO_MEMORY,
+                                               deviceInterfaceListLength * sizeof(WCHAR));
+        if (deviceInterfaceList == NULL)
+        {
+            lastError = GetLastError();
+            TraceEvents(TRACE_LEVEL_ERROR,
+                        DMF_TRACE,
+                        "HeapAlloc fails: lastError=%!WINERROR!",
+                        lastError);
+            ntStatus = NTSTATUS_FROM_WIN32(lastError);
+            goto Exit;
+        }
+
+        configRet = CM_Get_Device_Interface_List((LPGUID)GuidDevicePropertyInterface,
+                                                 parentDeviceInstanceId,
+                                                 deviceInterfaceList,
+                                                 deviceInterfaceListLength,
+                                                 CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+    } while (configRet == CR_BUFFER_SMALL);
+
+    if (configRet != CR_SUCCESS)
+    {
+        lastError = GetLastError();
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "CM_Get_Device_Interface_List fails: configRet=%d lastError=%!WINERROR!",
+                    configRet,
+                    lastError);
+        ntStatus = NTSTATUS_FROM_WIN32(lastError);
+        goto Exit;
+    }
+
+    // Loop through the interfaces for a matching target and open it.
+    // Ensure to return STATUS_SUCCESS only on a matched target get.
+    //
+    ntStatus = STATUS_NOT_FOUND;
+    interfaceIndex = 0;
+    UNICODE_STRING symbolicLinkName;
+    for (currentInterface = deviceInterfaceList;
+         *currentInterface;
+         currentInterface += wcslen(currentInterface) + 1)
+    {
+        // At this point, enumeration has started so return STATUS_SUCCESS to
+        // to indicated enumeration started. It is up to the Client to determine
+        // if the data returned by enumeration from Client callback is correct.
+        //
+        ntStatus = STATUS_SUCCESS;
+
+        TraceEvents(TRACE_LEVEL_VERBOSE,
+                    DMF_TRACE,
+                    "[interfaceIndex=%d] Checking interface=[%ws]",
+                    interfaceIndex,
+                    currentInterface);
+
+        // The given interface index is found. Try to create and open it.
+        //
+
+        RtlInitUnicodeString(&symbolicLinkName,
+                             currentInterface);
+
+        BOOLEAN continueEnumeration;
+
+        // Allow the Client to create and open the target or perform other
+        // actions using the interface information.
+        //
+        continueEnumeration = ParentTargetCallback(DmfModule,
+                                                   interfaceIndex,
+                                                   currentInterface,
+                                                   &symbolicLinkName,
+                                                   ClientContext);
+        if (!continueEnumeration)
+        {
+            goto Exit;
+        }
+
+        // For Client callback use only.
+        //
+        interfaceIndex++;
+    }
+
+Exit:
+
+    if (deviceInterfaceList != NULL)
+    {
+        if (!HeapFree(GetProcessHeap(),
+                      0,
+                      deviceInterfaceList))
+        {
+            lastError = GetLastError();
+            TraceEvents(TRACE_LEVEL_ERROR,
+                        DMF_TRACE,
+                        "HeapFree fails: %!WINERROR!",
+                        lastError);
+            ntStatus = NTSTATUS_FROM_WIN32(lastError);
+            deviceInterfaceList = NULL;
+        }
+    }
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_PropertyUint32Get(
+    _In_  DMFMODULE DmfModule,
+    _In_  GUID* PropertyInterfaceGuid,
+    _In_  PDEVPROPKEY PropertyKey,
+    _Out_ UINT32* Value
+    )
+/*++
+
+Routine Description:
+
+    Gets the specified property value on the property interface.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    PropertyInterfaceGuid - The GUID of the requested property interface.
+    PropertyKey - The device's property key.
+    Value - The property value if found.
+
+Return Value:
+
+    NTSTATUS -- STATUS_SUCCESS on a successful query, and a CONFIGRET error
+                converted to an NTSTATUS code on failure.
+
+--*/
+{
+    NTSTATUS ntStatus;
+    CONFIGRET configRet;
+    PWSTR deviceInterfaceList;
+    ULONG deviceInterfaceListLength;
+    PWSTR currentInterface;
+    DEVPROPTYPE propertyType;
+    ULONG propertySize;
+    WCHAR currentDevice[MAX_DEVICE_ID_LEN];
+    DEVINST deviceInstance;
+
+    UNREFERENCED_PARAMETER(DmfModule);
+
+    FuncEntry(DMF_TRACE);
+
+    PAGED_CODE();
+
+    // Device interfaces can come and go, so we will look a few times for the requested interface.
+    // This also will break us out of the below loop if the interface GUID is not found.
+    //
+    const int MAX_SEARCH_COUNT = 5;
+    int searchLoopCount  = 0;
+    deviceInterfaceList = NULL;
+    configRet = CR_FAILURE;
+    
+    if (PropertyInterfaceGuid == NULL || 
+        PropertyKey == NULL || 
+        Value == NULL)
+    {
+        ntStatus = STATUS_INVALID_PARAMETER;
+        goto Exit;
+    }
+
+    *Value = 0;
+    do 
+    {
+        configRet = CM_Get_Device_Interface_List_Size(&deviceInterfaceListLength,
+                                                      PropertyInterfaceGuid,
+                                                      NULL,
+                                                      CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+        if (CR_SUCCESS != configRet)
+        {
+            TraceEvents(TRACE_LEVEL_ERROR,
+                        DMF_TRACE,
+                        "CM_Get_Device_Interface_List_Size fails: 0x%x",
+                        configRet);
+            break;
+        }
+
+        if (NULL != deviceInterfaceList) 
+        {
+            free(deviceInterfaceList);
+            deviceInterfaceList = NULL;
+        }
+
+        deviceInterfaceList = (PWSTR)malloc(deviceInterfaceListLength * sizeof(WCHAR));
+
+        if (NULL == deviceInterfaceList)
+        {
+            configRet = CR_OUT_OF_MEMORY;
+            break;
+        }
+
+        configRet = CM_Get_Device_Interface_List(PropertyInterfaceGuid,
+                                                 NULL,
+                                                 deviceInterfaceList,
+                                                 deviceInterfaceListLength,
+                                                 CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+        searchLoopCount++;
+    } while (configRet == CR_BUFFER_SMALL && searchLoopCount <= MAX_SEARCH_COUNT);
+    
+    if (searchLoopCount >= MAX_SEARCH_COUNT)
+    {
+        configRet = CR_INVALID_DATA;
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "Did not find requested interface, config return: 0x%x",
+                    configRet);
+        goto Exit;
+    }
+
+    if (CR_SUCCESS != configRet)
+    {
+        goto Exit;
+    }
+
+    ntStatus = STATUS_NOT_FOUND;
+
+    // Take the first interface found.
+    // 
+    currentInterface = deviceInterfaceList;
+    if (!*currentInterface)
+    {
+        configRet = CR_INVALID_DATA;
+        TraceEvents(TRACE_LEVEL_ERROR,
+                    DMF_TRACE,
+                    "Did not find requested interface: 0x%x",
+                     configRet);
+        goto Exit;
+    }
+
+   propertySize = sizeof(currentDevice);
+   configRet = CM_Get_Device_Interface_Property(currentInterface,
+                                                &DEVPKEY_Device_InstanceId,
+                                                &propertyType,
+                                                (PBYTE)currentDevice,
+                                                &propertySize,
+                                                0);
+   if (CR_SUCCESS != configRet)
+   {
+       TraceEvents(TRACE_LEVEL_ERROR,
+                   DMF_TRACE,
+                   "CM_Get_Device_Interface_Property fails: 0x%x",
+                   configRet);
+       goto Exit;
+   }
+   
+   if (DEVPROP_TYPE_STRING != propertyType)
+   {
+       configRet = CR_INVALID_DATA;
+       goto Exit;
+   }
+
+   // Get the device instance, and then the device.
+   // 
+   propertySize = sizeof(currentDevice);
+   configRet = CM_Get_Device_Interface_Property(currentInterface,
+                                                &DEVPKEY_Device_InstanceId,
+                                                &propertyType,
+                                                (PBYTE)currentDevice,
+                                                &propertySize,
+                                                0);
+   if (CR_SUCCESS != configRet)
+   {
+
+       TraceEvents(TRACE_LEVEL_ERROR,
+                   DMF_TRACE,
+                   "CM_Get_Device_Interface_Property fails: 0x%x",
+                   configRet);
+       goto Exit;
+   }
+   
+   configRet = CM_Locate_DevNode(&deviceInstance,
+                                 currentDevice,
+                                 CM_LOCATE_DEVNODE_NORMAL);
+
+   if (configRet != CR_SUCCESS)
+   {
+       TraceEvents(TRACE_LEVEL_ERROR,
+                   DMF_TRACE,
+                   "CM_Locate_DevNode fails: 0x%x",
+                   configRet);
+       goto Exit;
+   }
+
+   // Now we can query the property.
+   //
+   configRet = CM_Get_DevNode_Property(deviceInstance,
+                                       PropertyKey,
+                                       &propertyType,
+                                       (BYTE*)Value,
+                                       &propertySize,
+                                       0);
+
+   if (CR_SUCCESS != configRet)
+   {
+       TraceEvents(TRACE_LEVEL_ERROR,
+                   DMF_TRACE,
+                   "CM_Get_Device_Interface_Property fails: 0x%x",
+                   configRet);
+       goto Exit;
+   }
+
+   // Verify that the type and size is correct.
+   //
+   if (DEVPROP_TYPE_UINT32 != propertyType)
+   {
+       configRet = CR_INVALID_DATA;
+       TraceEvents(TRACE_LEVEL_ERROR,
+                   DMF_TRACE,
+                   "Expected type : 'DEVPROP_TYPE_UINT32'");
+       goto Exit;
+   }
+   if (sizeof(UINT32) != propertySize)
+   {
+       configRet = CR_INVALID_DATA;
+       TraceEvents(TRACE_LEVEL_ERROR,
+                   DMF_TRACE,
+                   "Expected size of UINT32");
+       goto Exit;
+   }
+
+   TraceEvents(TRACE_LEVEL_INFORMATION,
+               DMF_TRACE,
+               "Found requested property value: %d",
+               *Value);
+
+Exit:
+
+    // Cleanup.
+    //
+    if (deviceInterfaceList != NULL)
+    {
+        free(deviceInterfaceList);
+    }
+    
+    if (configRet == CR_SUCCESS)
+    {
+        ntStatus = STATUS_SUCCESS;
+    }
+    else
+    {
+        ntStatus = NTSTATUS_FROM_WIN32(configRet);
+    }
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+#pragma code_seg()
 
 // eof: Dmf_CmApi.c
 //

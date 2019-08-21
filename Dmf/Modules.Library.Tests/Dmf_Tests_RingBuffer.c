@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.Tests.h"
 #include "DmfModules.Library.Tests.Trace.h"
 
@@ -44,9 +45,17 @@ typedef struct
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
-// This Module has no Context.
+typedef struct
+{
+    // Thread that executes tests.
+    //
+    DMFMODULE DmfModuleThread;
+} DMF_CONTEXT_Tests_RingBuffer;
+
+// This macro declares the following function:
+// DMF_CONTEXT_GET()
 //
-DMF_MODULE_DECLARE_NO_CONTEXT(Tests_RingBuffer)
+DMF_MODULE_DECLARE_CONTEXT(Tests_RingBuffer)
 
 // This Module has no Config.
 //
@@ -159,8 +168,9 @@ Tests_RingBuffer_Enumeration(
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID
+NTSTATUS
 Tests_RingBuffer_RunTests(
+    _In_ DMFMODULE DmfModule,
     _In_ WDFDEVICE Device,
     _In_ ULONG MaximumItemCount
     )
@@ -172,6 +182,7 @@ Tests_RingBuffer_RunTests(
     ULONG data;
     NTSTATUS ntStatus;
     ULONG itemCountIndex;
+    DMF_CONTEXT_Tests_RingBuffer* moduleContext;
 
     // Time per iteration increases every iteration. After 256, it begins to take a very long time.
     //
@@ -180,6 +191,8 @@ Tests_RingBuffer_RunTests(
     PAGED_CODE();
 
     dmfModuleRingBuffer = NULL;
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+    ntStatus = STATUS_UNSUCCESSFUL;
 
     // Make a maximum count of 256.
     //
@@ -188,7 +201,7 @@ Tests_RingBuffer_RunTests(
         MaximumItemCount = maximumNumberOfItems;
     }
 
-    for (itemCountIndex = 1; itemCountIndex < MaximumItemCount; itemCountIndex++)
+    for (itemCountIndex = 1; itemCountIndex < MaximumItemCount && (! DMF_Thread_IsStopPending(moduleContext->DmfModuleThread)); itemCountIndex++)
     {
         WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
         objectAttributes.ParentObject = Device;
@@ -204,7 +217,8 @@ Tests_RingBuffer_RunTests(
                                          &dmfModuleRingBuffer);
         if (!NT_SUCCESS(ntStatus))
         {
-            ASSERT(FALSE);
+            // It can fail when driver is being removed.
+            //
             goto Exit;
         }
 
@@ -222,7 +236,7 @@ Tests_RingBuffer_RunTests(
 
         // Fill the buffer, reorder, enumerate and read back.
         //
-        for (ULONG itemIndex = 0; itemIndex < itemCountIndex; itemIndex++)
+        for (ULONG itemIndex = 0; itemIndex < itemCountIndex && (! DMF_Thread_IsStopPending(moduleContext->DmfModuleThread)); itemIndex++)
         {
             WRITE_MUST_SUCCEED(itemIndex);
         }
@@ -230,7 +244,7 @@ Tests_RingBuffer_RunTests(
                                TRUE);
         ENUM_AND_VERIFY(0, 
                         itemCountIndex);
-        for (ULONG itemIndex = 0; itemIndex < itemCountIndex; itemIndex++)
+        for (ULONG itemIndex = 0; itemIndex < itemCountIndex && (! DMF_Thread_IsStopPending(moduleContext->DmfModuleThread)); itemIndex++)
         {
             FIND_AND_VERIFY(itemIndex);
             READ_AND_VERIFY(itemIndex);
@@ -238,7 +252,7 @@ Tests_RingBuffer_RunTests(
 
         // Overfill the buffer, reorder, enumerate and read back.
         //
-        for (ULONG overFillExtra = 0; overFillExtra < itemCountIndex * 8; overFillExtra++)
+        for (ULONG overFillExtra = 0; overFillExtra < (itemCountIndex * 8) && (! DMF_Thread_IsStopPending(moduleContext->DmfModuleThread)); overFillExtra++)
         {
             for (ULONG itemIndex = 0; itemIndex < itemCountIndex + overFillExtra; itemIndex++)
             {
@@ -266,7 +280,7 @@ Tests_RingBuffer_RunTests(
                                TRUE);
         READ_MUST_FAIL();
 
-        for (ULONG partialFillSize = 0; partialFillSize < itemCountIndex; partialFillSize++)
+        for (ULONG partialFillSize = 0; partialFillSize < itemCountIndex && (! DMF_Thread_IsStopPending(moduleContext->DmfModuleThread)); partialFillSize++)
         {
             // Under fill the buffer, reorder, enumerate and read back.
             //
@@ -278,7 +292,7 @@ Tests_RingBuffer_RunTests(
                                    TRUE);
             ENUM_AND_VERIFY(0, 
                             itemCountIndex - partialFillSize);
-            for (ULONG itemIndex = 0; itemIndex < (itemCountIndex - partialFillSize); itemIndex++)
+            for (ULONG itemIndex = 0; itemIndex < (itemCountIndex - partialFillSize) && (! DMF_Thread_IsStopPending(moduleContext->DmfModuleThread)); itemIndex++)
             {
                 FIND_AND_VERIFY(itemIndex);
                 READ_AND_VERIFY(itemIndex);
@@ -292,7 +306,7 @@ Tests_RingBuffer_RunTests(
             READ_MUST_FAIL();
         }
 
-        DMF_Module_Destroy(dmfModuleRingBuffer);
+        WdfObjectDelete(dmfModuleRingBuffer);
         dmfModuleRingBuffer = NULL;
     }
 
@@ -300,10 +314,57 @@ Exit:
 
     if (dmfModuleRingBuffer != NULL)
     {
-        DMF_Module_Destroy(dmfModuleRingBuffer);
+        WdfObjectDelete(dmfModuleRingBuffer);
     }
+
+    return ntStatus;
 }
 #pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static
+VOID
+Tests_RingBuffer_WorkThread(
+    _In_ DMFMODULE DmfModuleThread
+    )
+{
+    DMFMODULE dmfModule;
+    DMF_CONTEXT_Tests_RingBuffer* moduleContext;
+    WDFDEVICE device;
+    ULONG itemCountMax;
+    NTSTATUS ntStatus;
+
+    PAGED_CODE();
+
+    dmfModule = DMF_ParentModuleGet(DmfModuleThread);
+    moduleContext = DMF_CONTEXT_GET(dmfModule);
+    device = DMF_ParentDeviceGet(dmfModule);
+
+    itemCountMax = TestsUtility_GenerateRandomNumber(4, 
+                                                     ITEM_COUNT_MAX);
+
+    ntStatus = Tests_RingBuffer_RunTests(dmfModule,
+                                         device, 
+                                         itemCountMax);
+
+    // Repeat the test, until stop is signaled or the function stopped because the
+    // driver is stopping.
+    //
+    if ((! DMF_Thread_IsStopPending(DmfModuleThread)) &&
+        (NT_SUCCESS(ntStatus)))
+    {
+        DMF_Thread_WorkReady(DmfModuleThread);
+    }
+
+    TestsUtility_YieldExecution();
+}
+#pragma code_seg()
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+// WDF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // DMF Module Callbacks
@@ -335,33 +396,114 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
-    WDFDEVICE device;
+    DMF_CONTEXT_Tests_RingBuffer* moduleContext;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    ntStatus = STATUS_SUCCESS;
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+    // Start the thread.
+    //
+    ntStatus = DMF_Thread_Start(moduleContext->DmfModuleThread);
 
-    device = DMF_ParentDeviceGet(DmfModule);
+    // Tell the thread it has work to do.
+    //
+    DMF_Thread_WorkReady(moduleContext->DmfModuleThread);
 
-    Tests_RingBuffer_RunTests(device, 
-                              ITEM_COUNT_MAX);
-
-    
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
 
     return ntStatus;
 }
 #pragma code_seg()
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static
+VOID
+Tests_RingBuffer_Close(
+    _In_ DMFMODULE DmfModule
+    )
+/*++
 
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Tests_RingBuffer;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Tests_RingBuffer;
+Routine Description:
+
+    Close an instance of a DMF Module of type Test_RingBuffer.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+
+Return Value:
+
+    STATUS_SUCCESS
+
+--*/
+{
+    DMF_CONTEXT_Tests_RingBuffer* moduleContext;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    DMF_Thread_Stop(moduleContext->DmfModuleThread);
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_Tests_RingBuffer_ChildModulesAdd(
+    _In_ DMFMODULE DmfModule,
+    _In_ DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+    _In_ PDMFMODULE_INIT DmfModuleInit
+    )
+/*++
+
+Routine Description:
+
+    Configure and add the required Child Modules to the given Parent Module.
+
+Arguments:
+
+    DmfModule - The given Parent Module.
+    DmfParentModuleAttributes - Pointer to the parent DMF_MODULE_ATTRIBUTES structure.
+    DmfModuleInit - Opaque structure to be passed to DMF_DmfModuleAdd.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_MODULE_ATTRIBUTES moduleAttributes;
+    DMF_CONTEXT_Tests_RingBuffer* moduleContext;
+    DMF_CONFIG_Thread moduleConfigThread;
+
+    UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
+                                          &moduleAttributes);
+    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
+    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_RingBuffer_WorkThread;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                        &moduleAttributes,
+                        WDF_NO_OBJECT_ATTRIBUTES,
+                        &moduleContext->DmfModuleThread);
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -397,46 +539,34 @@ Return Value:
 
 --*/
 {
-    DMFMODULE dmfModule;
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Tests_RingBuffer;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Tests_RingBuffer;
 
     PAGED_CODE();
 
-    dmfModule = NULL;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Tests_RingBuffer);
+    dmfCallbacksDmf_Tests_RingBuffer.ChildModulesAdd = DMF_Tests_RingBuffer_ChildModulesAdd;
+    dmfCallbacksDmf_Tests_RingBuffer.DeviceOpen = Tests_RingBuffer_Open;
+    dmfCallbacksDmf_Tests_RingBuffer.DeviceClose = Tests_RingBuffer_Close;
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Tests_RingBuffer);
-    DmfCallbacksDmf_Tests_RingBuffer.DeviceOpen = Tests_RingBuffer_Open;
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Tests_RingBuffer,
+                                            Tests_RingBuffer,
+                                            DMF_CONTEXT_Tests_RingBuffer,
+                                            DMF_MODULE_OPTIONS_PASSIVE,
+                                            DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DMF_MODULE_DESCRIPTOR_INIT(DmfModuleDescriptor_Tests_RingBuffer,
-                               Tests_RingBuffer,
-                               DMF_MODULE_OPTIONS_PASSIVE,
-                               DMF_MODULE_OPEN_OPTION_OPEN_Create);
-
-    DmfModuleDescriptor_Tests_RingBuffer.CallbacksDmf = &DmfCallbacksDmf_Tests_RingBuffer;
+    dmfModuleDescriptor_Tests_RingBuffer.CallbacksDmf = &dmfCallbacksDmf_Tests_RingBuffer;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Tests_RingBuffer,
-                                &dmfModule);
+                                &dmfModuleDescriptor_Tests_RingBuffer,
+                                DmfModule);
     if (!NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
     }
-
-    *DmfModule = dmfModule;
-
-Exit:
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        if (NULL != dmfModule)
-        {
-            DMF_Module_Destroy(dmfModule);
-            dmfModule = NULL;
-        }
-    }    
 
     return(ntStatus);
 }

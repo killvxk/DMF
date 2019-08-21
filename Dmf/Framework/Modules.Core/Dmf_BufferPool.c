@@ -24,6 +24,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Core.h"
 #include "DmfModules.Core.Trace.h"
 
@@ -104,7 +105,7 @@ typedef struct
     // Stores the location of this buffer in the list.
     //
     LIST_ENTRY ListEntry;
-    // Wdf Memory object for this structure and the client buffer that is
+    // WDF Memory object for this structure and the client buffer that is
     // located immediately after this structure.
     //
     WDFMEMORY BufferPoolEntryMemory;
@@ -649,7 +650,6 @@ Return:
             // Found it. Remove it from list 
             //
             ASSERT(bufferPoolEntryTimer->Timer != NULL);
-            ASSERT(bufferPoolEntryTimer->TimerExpirationMilliseconds != 0);
 
             // Remove item from list.
             // (If the Client wants to use this buffer, Client has saved off the buffer in Client's Context).
@@ -662,6 +662,10 @@ Return:
             timerExpirationCallback = bufferPoolEntryTimer->TimerExpirationCallback;
             BufferPool_TimerFieldsClear(dmfModule,
                                         bufferPoolEntryTimer);
+            
+            // The only matching buffer has been found.
+            //
+            break;
         }
 
         // Keep searching.
@@ -670,18 +674,23 @@ Return:
 
     DMF_ModuleUnlock(dmfModule);
 
-    // Search loop above must have succeeded.
+    // Due to race conditions with cancel routines, it is possible the buffer was removed from the list
+    // during timer expiration.
     //
-    ASSERT(timerExpirationCallback != NULL);
-    // 'Dereferencing NULL pointer'
-    //
-    #pragma warning(suppress: 6011)
-    // Call the client driver's timer callback function.
-    //
-    timerExpirationCallback(dmfModule,
-                            bufferPoolEntryTimer->ClientBuffer,
-                            bufferPoolEntryTimer->ClientBufferContext,
-                            bufferPoolEntryTimer->TimerExpirationCallbackContext);
+    if (timerExpirationCallback != NULL)
+    {
+        // Call the client driver's timer callback function.
+        //
+        timerExpirationCallback(dmfModule,
+                                bufferPoolEntryTimer->ClientBuffer,
+                                bufferPoolEntryTimer->ClientBufferContext,
+                                bufferPoolEntryTimer->TimerExpirationCallbackContext);
+    }
+    else
+    {
+        // Buffer was removed from the list while timer was expiring.
+        //
+    }
 
     FuncExitVoid(DMF_TRACE);
 }
@@ -734,7 +743,7 @@ Return Value:
     // Allocate space for the list entry that holds the meta data for the buffer.
     //
     WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
-    objectAttributes.ParentObject = NULL;
+    objectAttributes.ParentObject = DmfModule;
     ntStatus = DMF_Portable_LookasideListCreateMemory(&moduleContext->LookasideList,
                                                       &memory);
     if (! NT_SUCCESS(ntStatus))
@@ -1077,8 +1086,12 @@ Return Value:
     // Populate Module Context.
     //
     moduleContext->EnableLookAside = moduleConfig->Mode.SourceSettings.EnableLookAside;
-    ASSERT((moduleConfig->Mode.SourceSettings.EnableLookAside && moduleConfig->Mode.SourceSettings.BufferCount > 0) ||
-           (! moduleConfig->Mode.SourceSettings.EnableLookAside));
+    ASSERT((moduleConfig->BufferPoolMode == BufferPool_Mode_Source && 
+            ((! moduleConfig->Mode.SourceSettings.EnableLookAside && moduleConfig->Mode.SourceSettings.BufferCount > 0) ||
+             moduleConfig->Mode.SourceSettings.EnableLookAside)) ||
+           (moduleConfig->BufferPoolMode == BufferPool_Mode_Sink && 
+            (! moduleConfig->Mode.SourceSettings.EnableLookAside && moduleConfig->Mode.SourceSettings.BufferCount == 0))
+          );
     ASSERT((moduleConfig->Mode.SourceSettings.CreateWithTimer && moduleConfig->Mode.SourceSettings.BufferCount > 0) ||
            (! moduleConfig->Mode.SourceSettings.CreateWithTimer));
     moduleContext->BufferPoolMode = moduleConfig->BufferPoolMode;
@@ -1098,7 +1111,7 @@ Return Value:
                 moduleConfig->Mode.SourceSettings.BufferCount,
                 moduleConfig->Mode.SourceSettings.BufferSize);
 
-    if (moduleConfig->Mode.SourceSettings.BufferCount > 0)
+    if (moduleConfig->BufferPoolMode == BufferPool_Mode_Source)
     {
         ASSERT(moduleConfig->Mode.SourceSettings.BufferSize > 0);
         sizeOfEachAllocation = sizeof(BUFFERPOOL_ENTRY) +
@@ -1309,7 +1322,7 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -1394,14 +1407,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_BufferPool;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_BufferPool;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -1424,7 +1429,7 @@ Routine Description:
 
 Arguments:
 
-    Device - Client driver's WDFDEVICE object.
+    Device - Client Driver's WDFDEVICE object.
     DmfModuleAttributes - Opaque structure that contains parameters DMF needs to initialize the Module.
     ObjectAttributes - WDF object attributes for DMFMODULE.
     DmfModule - Address of the location where the created DMFMODULE handle is returned.
@@ -1436,46 +1441,54 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_BufferPool;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_BufferPool;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_BufferPool);
-    DmfCallbacksDmf_BufferPool.DeviceOpen = DMF_BufferPool_Open;
-    DmfCallbacksDmf_BufferPool.DeviceClose = DMF_BufferPool_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_BufferPool);
+    dmfCallbacksDmf_BufferPool.DeviceOpen = DMF_BufferPool_Open;
+    dmfCallbacksDmf_BufferPool.DeviceClose = DMF_BufferPool_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_BufferPool,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_BufferPool,
                                             BufferPool,
                                             DMF_CONTEXT_BufferPool,
                                             DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_BufferPool.CallbacksDmf = &DmfCallbacksDmf_BufferPool;
-    DmfModuleDescriptor_BufferPool.ModuleConfigSize = sizeof(DMF_CONFIG_BufferPool);
+    dmfModuleDescriptor_BufferPool.CallbacksDmf = &dmfCallbacksDmf_BufferPool;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_BufferPool,
+                                &dmfModuleDescriptor_BufferPool,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
+        goto Exit;
     }
 
 #if defined(DEBUG)
     // If Client wants to use paged pool buffers, then Client must instantiate this Module at Passive Level (which this Module allows).
     // To do so, the DmfModuleAttributes->PassiveLevel must equal TRUE.
     //
+    // NOTE: Only check this for Source Mode since Sink Mode initializes Pool Type to zero since it is not used.
+    //       Zero can mean different pool types on different platforms, e.g., ARM.
+    //
     DMF_CONFIG_BufferPool* moduleConfig;
     moduleConfig = DMF_CONFIG_GET(*DmfModule);
 
-    if (DMF_IsPoolTypePassiveLevel(moduleConfig->Mode.SourceSettings.PoolType))
+    if ((moduleConfig->BufferPoolMode == BufferPool_Mode_Source) &&
+        (DMF_IsPoolTypePassiveLevel(moduleConfig->Mode.SourceSettings.PoolType)))
     {
         ASSERT(DMF_ModuleLockIsPassive(*DmfModule));
     }
 #endif
+
+Exit:
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
 
@@ -1515,8 +1528,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     bufferPoolEntry = BufferPool_BufferPoolEntryGetFromClientBuffer(ClientBuffer);
 
@@ -1558,8 +1571,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1614,8 +1627,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1801,7 +1814,7 @@ NTSTATUS
 DMF_BufferPool_Get(
     _In_ DMFMODULE DmfModule,
     _Out_ VOID** ClientBuffer,
-    _Out_ VOID** ClientBufferContext
+    _Out_opt_ VOID** ClientBufferContext
     )
 /*++
 
@@ -1829,8 +1842,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     clientBuffer = BufferPool_BufferGet(DmfModule);
     if (NULL == clientBuffer)
@@ -1845,8 +1858,19 @@ Return Value:
     *ClientBuffer = bufferPoolEntry->ClientBuffer;
 
     ASSERT(bufferPoolEntry->ClientBufferContext == (UCHAR*)(bufferPoolEntry->SentinelData) + BufferPool_SentinelSize);
-    ASSERT(ClientBufferContext != NULL);
-    *ClientBufferContext = bufferPoolEntry->ClientBufferContext;
+    if (ClientBufferContext != NULL)
+    {
+        if (bufferPoolEntry->BufferContextSize > 0)
+        {
+            *ClientBufferContext = bufferPoolEntry->ClientBufferContext;
+        }
+        else
+        {
+            // No ASSERT to maintain compatibility with older Clients.
+            //
+            *ClientBufferContext = NULL;
+        }
+    }
 
     ntStatus = STATUS_SUCCESS;
 
@@ -1893,8 +1917,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     clientBuffer = BufferPool_BufferGet(DmfModule);
     if (NULL == clientBuffer)
@@ -1960,8 +1984,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     clientBuffer = BufferPool_BufferGet(DmfModule);
     if (NULL == clientBuffer)
@@ -2027,8 +2051,10 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    // This function is called while the Module is closing as it is flushing its buffers.
+    //
+    DMFMODULE_VALIDATE_IN_METHOD_CLOSING_OK(DmfModule,
+                                            BufferPool);
 
     bufferPoolEntry = BufferPool_BufferPoolEntryGetFromClientBuffer(ClientBuffer);
 
@@ -2096,8 +2122,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD_CLOSING_OK(DmfModule,
+                                            BufferPool);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -2186,11 +2212,10 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferPool);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferPool);
 
     ASSERT(TimerExpirationCallback != NULL);
-    ASSERT(TimerExpirationMilliseconds > 0);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

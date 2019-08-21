@@ -124,12 +124,12 @@
       <WppFileExtensions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.c.C.cpp.CPP.h.H</WppFileExtensions>
       <WppFileExtensions Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">.c.C.cpp.CPP.h.H</WppFileExtensions>
       <WppFileExtensions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">.c.C.cpp.CPP.h.H</WppFileExtensions>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(AdditionalIncludeDirectories);..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">%(AdditionalIncludeDirectories);..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(AdditionalIncludeDirectories);..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">%(AdditionalIncludeDirectories);..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">%(AdditionalIncludeDirectories);..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(AdditionalIncludeDirectories);..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <WppRecorderEnabled Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</WppRecorderEnabled>
       <WppRecorderEnabled Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</WppRecorderEnabled>
       <WppRecorderEnabled Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</WppRecorderEnabled>
@@ -169,6 +169,9 @@
     <ClInclude Include="..\..\Modules.Library\Dmf_ComponentFirmwareUpdate.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_ComponentFirmwareUpdateHidTransport.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_DefaultTarget.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_File.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_I2cTarget.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_Interface_ComponentFirmwareUpdate.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_QueuedWorkItem.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_PingPongBuffer.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_HidTarget.h" />
@@ -176,6 +179,8 @@
     <ClInclude Include="..\..\Modules.Library\Dmf_ContinuousRequestTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_RequestTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_ScheduledTask.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_SmbiosWmi.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_String.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_SymbolicLinkTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_Thread.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_NotifyUserWithRequest.h" />
@@ -188,6 +193,9 @@
     <ClCompile Include="..\..\Modules.Library\Dmf_ComponentFirmwareUpdate.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_ComponentFirmwareUpdateHidTransport.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_DefaultTarget.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_File.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_I2cTarget.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_Interface_ComponentFirmwareUpdate.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_QueuedWorkItem.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_PingPongBuffer.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_HidTarget.c" />
@@ -195,6 +203,8 @@
     <ClCompile Include="..\..\Modules.Library\Dmf_ContinuousRequestTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_RequestTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_ScheduledTask.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_SmbiosWmi.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_String.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_SymbolicLinkTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_Thread.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_NotifyUserWithRequest.c" />
@@ -207,17 +217,22 @@
     <Text Include="..\..\Modules.Library\Dmf_SymbolicLinkTarget.md" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\Modules.Library\Dmf_CmApi.md" />
     <None Include="..\..\Modules.Library\Dmf_ComponentFirmwareUpdate.md" />
     <None Include="..\..\Modules.Library\Dmf_ComponentFirmwareUpdateHidTransport.md" />
     <None Include="..\..\Modules.Library\Dmf_ContinuousRequestTarget.md" />
     <None Include="..\..\Modules.Library\Dmf_DefaultTarget.md" />
     <None Include="..\..\Modules.Library\Dmf_DeviceInterfaceTarget.md" />
+    <None Include="..\..\Modules.Library\Dmf_File.md" />
     <None Include="..\..\Modules.Library\Dmf_HidTarget.md" />
+    <None Include="..\..\Modules.Library\Dmf_Interface_ComponentFirmwareUpdate.md" />
     <None Include="..\..\Modules.Library\Dmf_NotifyUserWithRequest.md" />
     <None Include="..\..\Modules.Library\Dmf_PingPongBuffer.md" />
     <None Include="..\..\Modules.Library\Dmf_QueuedWorkItem.md" />
     <None Include="..\..\Modules.Library\Dmf_Registry.md" />
     <None Include="..\..\Modules.Library\Dmf_ScheduledTask.md" />
+    <None Include="..\..\Modules.Library\Dmf_SmbiosWmi.md" />
+    <None Include="..\..\Modules.Library\Dmf_String.md" />
     <None Include="..\..\Modules.Library\Dmf_Thread.md" />
     <None Include="..\..\Modules.Library\Dmf_ThreadedBufferQueue.md" />
   </ItemGroup>

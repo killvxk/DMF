@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -153,6 +154,7 @@ Return Value:
     FuncExitVoid(DMF_TRACE);
 }
 
+#pragma code_seg("PAGE")
 ULONG
 NotifyUserWithRequest_EventRequestReturn(
     _In_ DMFMODULE DmfModule,
@@ -186,6 +188,8 @@ Return Value:
     ULONG numberOfRequestsCompleted;
     WDFREQUEST request;
 
+    PAGED_CODE();
+
     FuncEntry(DMF_TRACE);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
@@ -198,6 +202,13 @@ Return Value:
                                              &request);
     if (NT_SUCCESS(ntStatus))
     {
+        // NOTE: The decrement must happen before the request returns because
+        //       the caller may immediately enqueue another request.
+        //
+        ASSERT(moduleContext->EventCountHeld > 0);
+        InterlockedDecrement(&moduleContext->EventCountHeld);
+        numberOfRequestsCompleted++;
+        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "DEQUEUE request=0x%p PendingEvents=%d", request, moduleContext->EventCountHeld);
         if (NULL == EventCallbackFunction)
         {
             // Complete the request on behalf of Client Driver.
@@ -217,10 +228,6 @@ Return Value:
                                   EventCallbackContext,
                                   NtStatus);
         }
-        ASSERT(moduleContext->EventCountHeld > 0);
-        InterlockedDecrement(&moduleContext->EventCountHeld);
-        numberOfRequestsCompleted++;
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "DEQUEUE request=0x%p PendingEvents=%d", request, moduleContext->EventCountHeld);
     }
     else
     {
@@ -231,219 +238,9 @@ Return Value:
 
     return numberOfRequestsCompleted;
 }
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Callbacks
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg()
 
 #pragma code_seg("PAGE")
-_IRQL_requires_max_(PASSIVE_LEVEL)
-_Must_inspect_result_
-static
-NTSTATUS
-DMF_NotifyUserWithRequest_Open(
-    _In_ DMFMODULE DmfModule
-    )
-/*++
-
-Routine Description:
-
-    Initialize an instance of a DMF Module of type NotifyUserWithRequest.
-
-Arguments:
-
-    DmfModule - This Module's handle.
-
-Return Value:
-
-    STATUS_SUCCESS
-
---*/
-{
-    NTSTATUS ntStatus;
-    DMF_CONTEXT_NotifyUserWithRequest* moduleContext;
-    WDF_IO_QUEUE_CONFIG ioQueueConfig;
-    WDFDEVICE device;
-    WDF_OBJECT_ATTRIBUTES queueAttributes;
-
-    PAGED_CODE();
-
-    FuncEntry(DMF_TRACE);
-
-    moduleContext = DMF_CONTEXT_GET(DmfModule);
-
-    device = DMF_ParentDeviceGet(DmfModule);
-
-    // This queue will hold requests that are asynchronously completed.
-    // 
-    WDF_IO_QUEUE_CONFIG_INIT(&ioQueueConfig,
-                             WdfIoQueueDispatchManual);
-
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&queueAttributes,
-                                           DMFMODULE);
-    queueAttributes.ParentObject = DmfModule;
-
-    ioQueueConfig.PowerManaged = WdfFalse;
-    ioQueueConfig.EvtIoCanceledOnQueue = EvtIoCanceledOnQueue;
-    ntStatus = WdfIoQueueCreate(device,
-                                &ioQueueConfig,
-                                &queueAttributes,
-                                &moduleContext->EventRequestQueue);
-    if (! NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE,
-                    "WdfIoQueueCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // NOTE: It is not possible to get the parent of a WDFIOQUEUE.
-    // Therefore, it is necessary to save the DmfModule in its context area.
-    //
-    DMF_ModuleInContextSave(moduleContext->EventRequestQueue,
-                            DmfModule);
-
-Exit:
-
-    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
-
-    return ntStatus;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static
-VOID
-DMF_NotifyUserWithRequest_Close(
-    _In_ DMFMODULE DmfModule
-    )
-/*++
-
-Routine Description:
-
-    Uninitialize an instance of a DMF Module of type NotifyUserWithRequest.
-
-Arguments:
-
-    DmfModule - This Module's handle.
-
-Return Value:
-
-    None
-
---*/
-{
-    DMF_CONTEXT_NotifyUserWithRequest* moduleContext;
-
-    PAGED_CODE();
-
-    FuncEntry(DMF_TRACE);
-
-    moduleContext = DMF_CONTEXT_GET(DmfModule);
-
-    // Flush any requests held by this object.
-    //
-    DMF_NotifyUserWithRequest_RequestReturnAll(DmfModule,
-                                               NULL,
-                                               0,
-                                               STATUS_CANCELLED);
-
-    WdfObjectDelete(moduleContext->EventRequestQueue);
-
-    FuncExitVoid(DMF_TRACE);
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_NotifyUserWithRequest;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_NotifyUserWithRequest;
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-_Must_inspect_result_
-static
-NTSTATUS
-NotifyUserWithRequest_ChildModulesCreate(
-    _In_ DMFMODULE DmfModule
-    )
-/*++
-
-Routine Description:
-
-    Creates the Child Modules this Module needs.
-
-Arguments:
-
-    DmfModule - This Module's handle.
-
-Return Value:
-
-    NTSTATUS
-
---*/
-{
-    NTSTATUS ntStatus;
-    DMF_CONFIG_BufferQueue moduleBufferQueueConfigList;
-    DMF_CONTEXT_NotifyUserWithRequest* moduleContextNotifyUserWithRequest;
-    DMF_CONFIG_NotifyUserWithRequest* moduleConfigNotifyUserWithRequest;
-    WDF_OBJECT_ATTRIBUTES attributes;
-    DMF_MODULE_ATTRIBUTES moduleAttributes;
-    WDFDEVICE device;
-
-    PAGED_CODE();
-
-    FuncEntry(DMF_TRACE);
-
-    ntStatus = STATUS_INVALID_PARAMETER;
-
-    moduleContextNotifyUserWithRequest = DMF_CONTEXT_GET(DmfModule);
-    ASSERT(moduleContextNotifyUserWithRequest != NULL);
-
-    moduleConfigNotifyUserWithRequest = DMF_CONFIG_GET(DmfModule);
-    ASSERT(moduleConfigNotifyUserWithRequest != NULL);
-
-    device = DMF_ParentDeviceGet(DmfModule);
-
-    // dmfModule will be set as ParentObject for all child modules.
-    //
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = DmfModule;
-
-    // BufferQueue
-    // -----------
-    //
-    DMF_CONFIG_BufferQueue_AND_ATTRIBUTES_INIT(&moduleBufferQueueConfigList,
-                                               &moduleAttributes);
-    moduleBufferQueueConfigList.SourceSettings.EnableLookAside = FALSE;
-    moduleBufferQueueConfigList.SourceSettings.BufferCount = moduleConfigNotifyUserWithRequest->MaximumNumberOfPendingDataBuffers;
-    moduleBufferQueueConfigList.SourceSettings.BufferSize = sizeof(USEREVENT_ENTRY) +
-                                                            moduleConfigNotifyUserWithRequest->SizeOfDataBuffer;
-    moduleAttributes.ClientModuleInstanceName = "NotifyUserWithRequestBufferQueue";
-    ntStatus = DMF_BufferQueue_Create(device,
-                                      &moduleAttributes,
-                                      &attributes,
-                                      &moduleContextNotifyUserWithRequest->DmfModuleBufferQueue);
-    if (! NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_BufferQueue_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    ntStatus = STATUS_SUCCESS;
-
-Exit:
-
-    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
-
-    return ntStatus;
-}
-
 NTSTATUS
 NotifyUserWithRequest_CompleteRequestWithEventData(
     _In_ DMFMODULE DmfModule
@@ -452,8 +249,8 @@ NotifyUserWithRequest_CompleteRequestWithEventData(
 
 Routine Description:
 
-    Looks for a request and a usermode event. If both are found, calls the client callback function
-    to complete the request with the usermode event.
+    Looks for a request and a User-mode event. If both are found, calls the client callback function
+    to complete the request with the User-mode event.
 
 Arguments:
 
@@ -485,9 +282,6 @@ Return Value:
     clientBuffer = NULL;
     lockAcquired = FALSE;
     clientBufferExtracted = FALSE;
-
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_NotifyUserWithRequest);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -577,12 +371,208 @@ Exit:
     return ntStatus;
 
 }
+#pragma code_seg()
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+// WDF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+// DMF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+DMF_NotifyUserWithRequest_Open(
+    _In_ DMFMODULE DmfModule
+    )
+/*++
+
+Routine Description:
+
+    Initialize an instance of a DMF Module of type NotifyUserWithRequest.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+
+Return Value:
+
+    STATUS_SUCCESS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    DMF_CONTEXT_NotifyUserWithRequest* moduleContext;
+    WDF_IO_QUEUE_CONFIG ioQueueConfig;
+    WDFDEVICE device;
+    WDF_OBJECT_ATTRIBUTES queueAttributes;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    device = DMF_ParentDeviceGet(DmfModule);
+
+    // This queue will hold requests that are asynchronously completed.
+    // 
+    WDF_IO_QUEUE_CONFIG_INIT(&ioQueueConfig,
+                             WdfIoQueueDispatchManual);
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&queueAttributes,
+                                            DMFMODULE);
+    queueAttributes.ParentObject = DmfModule;
+
+    ioQueueConfig.PowerManaged = WdfFalse;
+    ioQueueConfig.EvtIoCanceledOnQueue = EvtIoCanceledOnQueue;
+    ntStatus = WdfIoQueueCreate(device,
+                                &ioQueueConfig,
+                                &queueAttributes,
+                                &moduleContext->EventRequestQueue);
+    if (! NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE,
+                    "WdfIoQueueCreate fails: ntStatus=%!STATUS!", ntStatus);
+        goto Exit;
+    }
+
+    // NOTE: It is not possible to get the parent of a WDFIOQUEUE.
+    // Therefore, it is necessary to save the DmfModule in its context area.
+    //
+    DMF_ModuleInContextSave(moduleContext->EventRequestQueue,
+                            DmfModule);
+
+Exit:
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static
+VOID
+DMF_NotifyUserWithRequest_Close(
+    _In_ DMFMODULE DmfModule
+    )
+/*++
+
+Routine Description:
+
+    Uninitialize an instance of a DMF Module of type NotifyUserWithRequest.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_CONTEXT_NotifyUserWithRequest* moduleContext;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    // Flush any requests held by this object.
+    //
+    DMF_NotifyUserWithRequest_RequestReturnAll(DmfModule,
+                                               NULL,
+                                               0,
+                                               STATUS_CANCELLED);
+
+    WdfObjectDelete(moduleContext->EventRequestQueue);
+    moduleContext->EventRequestQueue = NULL;
+
+    FuncExitVoid(DMF_TRACE);
+}
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_NotifyUserWithRequest_ChildModulesAdd(
+    _In_ DMFMODULE DmfModule,
+    _In_ DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+    _In_ PDMFMODULE_INIT DmfModuleInit
+    )
+/*++
+
+Routine Description:
+
+    Configure and add the required Child Modules to the given Parent Module.
+
+Arguments:
+
+    DmfModule - The given Parent Module.
+    DmfParentModuleAttributes - Pointer to the parent DMF_MODULE_ATTRIBUTES structure.
+    DmfModuleInit - Opaque structure to be passed to DMF_DmfModuleAdd.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_MODULE_ATTRIBUTES moduleAttributes;
+    DMF_CONTEXT_NotifyUserWithRequest* moduleContext;
+    DMF_CONFIG_NotifyUserWithRequest* moduleConfig;
+    DMF_CONFIG_BufferQueue moduleBufferQueueConfigList;
+
+    UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleConfig = DMF_CONFIG_GET(DmfModule);
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    // BufferQueue
+    // -----------
+    //
+    DMF_CONFIG_BufferQueue_AND_ATTRIBUTES_INIT(&moduleBufferQueueConfigList,
+                                               &moduleAttributes);
+    moduleBufferQueueConfigList.SourceSettings.EnableLookAside = FALSE;
+    moduleBufferQueueConfigList.SourceSettings.BufferCount = moduleConfig->MaximumNumberOfPendingDataBuffers;
+    moduleBufferQueueConfigList.SourceSettings.BufferSize = sizeof(USEREVENT_ENTRY) +
+                                                            moduleConfig->SizeOfDataBuffer;
+    if (DmfParentModuleAttributes->PassiveLevel)
+    {
+        moduleBufferQueueConfigList.SourceSettings.PoolType = PagedPool;
+    }
+    else
+    {
+        moduleBufferQueueConfigList.SourceSettings.PoolType = NonPagedPoolNx;
+    }
+    moduleAttributes.ClientModuleInstanceName = "NotifyUserWithRequestBufferQueue";
+    moduleAttributes.PassiveLevel = DmfParentModuleAttributes->PassiveLevel;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                     &moduleAttributes,
+                     WDF_NO_OBJECT_ATTRIBUTES,
+                     &moduleContext->DmfModuleBufferQueue);
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
+#pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSTATUS
@@ -612,56 +602,46 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
-    DMFMODULE dmfModule;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_NotifyUserWithRequest;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_NotifyUserWithRequest;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_NotifyUserWithRequest);
-    DmfCallbacksDmf_NotifyUserWithRequest.DeviceOpen = DMF_NotifyUserWithRequest_Open;
-    DmfCallbacksDmf_NotifyUserWithRequest.DeviceClose = DMF_NotifyUserWithRequest_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_NotifyUserWithRequest);
+    dmfCallbacksDmf_NotifyUserWithRequest.ChildModulesAdd = DMF_NotifyUserWithRequest_ChildModulesAdd;
+    dmfCallbacksDmf_NotifyUserWithRequest.DeviceOpen = DMF_NotifyUserWithRequest_Open;
+    dmfCallbacksDmf_NotifyUserWithRequest.DeviceClose = DMF_NotifyUserWithRequest_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_NotifyUserWithRequest,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_NotifyUserWithRequest,
                                             NotifyUserWithRequest,
                                             DMF_CONTEXT_NotifyUserWithRequest,
-                                            DMF_MODULE_OPTIONS_PASSIVE,
+                                            DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_NotifyUserWithRequest.CallbacksDmf = &DmfCallbacksDmf_NotifyUserWithRequest;
-    DmfModuleDescriptor_NotifyUserWithRequest.ModuleConfigSize = sizeof(DMF_CONFIG_NotifyUserWithRequest);
+    dmfModuleDescriptor_NotifyUserWithRequest.CallbacksDmf = &dmfCallbacksDmf_NotifyUserWithRequest;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_NotifyUserWithRequest,
-                                &dmfModule);
+                                &dmfModuleDescriptor_NotifyUserWithRequest,
+                                DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
     }
-
-    ntStatus = NotifyUserWithRequest_ChildModulesCreate(dmfModule);
-    if (! NT_SUCCESS(ntStatus))
-    {
-        DMF_Module_Destroy(dmfModule);
-        dmfModule = NULL;
-        goto Exit;
-    }
-
-Exit:
-
-    *DmfModule = dmfModule;
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
 
     return(ntStatus);
 }
+#pragma code_seg()
 
 // Module Methods
 //
 
+#pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_NotifyUserWithRequest_DataProcess(
@@ -707,8 +687,8 @@ Return Value:
     ntStatus = STATUS_SUCCESS;
     isLocked = FALSE;
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_NotifyUserWithRequest);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 NotifyUserWithRequest);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -792,7 +772,9 @@ Exit:
     FuncExitVoid(DMF_TRACE);
 
 }
+#pragma code_seg()
 
+#pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSTATUS
@@ -825,8 +807,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_NotifyUserWithRequest);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 NotifyUserWithRequest);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -861,7 +843,9 @@ Exit:
 
     return ntStatus;
 }
+#pragma code_seg()
 
+#pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSTATUS
@@ -893,8 +877,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_NotifyUserWithRequest);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 NotifyUserWithRequest);
 
     // Store the request.
     //
@@ -921,7 +905,9 @@ Exit:
 
     return ntStatus;
 }
+#pragma code_seg()
 
+#pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_NotifyUserWithRequest_RequestReturn(
@@ -958,8 +944,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_NotifyUserWithRequest);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 NotifyUserWithRequest);
 
     numberOfRequestsCompleted = NotifyUserWithRequest_EventRequestReturn(DmfModule,
                                                                          EventCallbackFunction,
@@ -976,7 +962,9 @@ Return Value:
 
     FuncExitVoid(DMF_TRACE);
 }
+#pragma code_seg()
 
+#pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_NotifyUserWithRequest_RequestReturnAll(
@@ -1017,8 +1005,8 @@ Return Value:
     // By design this Method can be called by Close callback.
     // (This Method is called to flush any remaining requests when Module is closed.)
     //
-    DMF_HandleValidate_ClosingOk(DmfModule,
-                                 &DmfModuleDescriptor_NotifyUserWithRequest);
+    DMFMODULE_VALIDATE_IN_METHOD_CLOSING_OK(DmfModule,
+                                            NotifyUserWithRequest);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1049,6 +1037,66 @@ Return Value:
     TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "Number of requests completed = %u", numberOfRequestsCompleted);
 
     FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_NotifyUserWithRequest_RequestReturnEx(
+    _In_ DMFMODULE DmfModule,
+    _In_opt_ EVT_DMF_NotifyUserWithRequeset_Complete* EventCallbackFunction,
+    _In_opt_ ULONG_PTR EventCallbackContext,
+    _In_ NTSTATUS NtStatus
+    )
+/*++
+
+Routine Description:
+
+    This is a variation of DMF_NotifyUserWithRequest_RequestReturn just by adding operation status.
+    Use case for variated function is when Client does not know if there is a request in a queue
+    but must still get data stored until a request arrives to carry the new data back.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    EventCallbackFunction - The function to call with dequeued request.
+    EventCallbackContext - Context to pass to EventCallbackFunction.
+    NtStatus - The status to send in completed request.
+
+Return Value:
+
+    STATUS_SUCCESS - A request was completed normally.
+    STATUS_UNSUCCESSFUL - There was no request in the queue.
+
+++*/
+{
+    ULONG numberOfRequestsCompleted;
+    NTSTATUS ntStatus;
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 NotifyUserWithRequest);
+
+    numberOfRequestsCompleted = NotifyUserWithRequest_EventRequestReturn(DmfModule,
+                                                                         EventCallbackFunction,
+                                                                         EventCallbackContext,
+                                                                         NtStatus);
+    if (0 == numberOfRequestsCompleted)
+    {
+        ntStatus = STATUS_UNSUCCESSFUL;   
+    }
+    else
+    {
+        ntStatus = STATUS_SUCCESS;
+    }
+
+    FuncExitVoid(DMF_TRACE);
+
+    return ntStatus;
 }
 
 // eof: Dmf_NotifyUserWithRequest.c

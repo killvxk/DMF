@@ -13,12 +13,12 @@ Abstract:
 Environment:
 
     Kernel-mode Driver Framework
-    User-mode Driver Framework
 
 --*/
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.Tests.h"
 #include "DmfModules.Library.Tests.Trace.h"
 
@@ -1680,11 +1680,11 @@ Return Value:
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
-    // Delay for 5 seconds, to make sure Software hive is loaded.
+    // Delay for 10 seconds, to make sure Software hive is loaded.
     //
     ntStatus = DMF_AlertableSleep_Sleep(moduleContext->DmfModuleAlertableSleep,
                                         0,
-                                        5000);
+                                        10000);
     ASSERT(STATUS_SUCCESS == ntStatus);
 
     DMF_AlertableSleep_ResetForReuse(moduleContext->DmfModuleAlertableSleep,
@@ -1746,66 +1746,111 @@ Return Value:
     Tests_Registry_Path_ReadNonExistent(moduleContext->DmfModuleRegistry);
     Tests_Registry_ValidatePathDeleted(moduleContext->DmfModuleRegistry);
 
-    // Path and Value Tests
-    // Do same as above, but this time open the path and operate only on the values, reusing the path handle.
+    // Path/Predefined Id key open and Value Tests
+    // Do same as above, but this time open the predefined key by id and operate only on the values, reusing the path handle.
     // --------------------
     //
-
-    ntStatus = DMF_Registry_HandleOpenByNameEx(moduleContext->DmfModuleRegistry,
-                                               REGISTRY_PATH_NAME,
-                                               GENERIC_ALL,
-                                               TRUE,
-                                               &registryHandle);
-    ASSERT(NT_SUCCESS(ntStatus));
-    ASSERT(registryHandle != NULL);
-
-    if (registryHandle != NULL)
+    ULONG predefinedIds[] =
     {
-        // Delete values.
+        // This is just dummy entry to cause path API to be used.
         //
-        Tests_Registry_Handle_DeleteValues(moduleContext->DmfModuleRegistry, registryHandle);
-
-        // Now, try to read some non-existent values.
+        0,
+        // These are the predefined Ids.
         //
-        Tests_Registry_Handle_ReadNonExistent(moduleContext->DmfModuleRegistry, registryHandle);
-
-        // Write the values.
+        PLUGPLAY_REGKEY_DEVICE,
+        PLUGPLAY_REGKEY_DRIVER,
+        // Note: PLUGPLAY_REGKEY_CURRENT_HWPROFILE may not be used alone.
         //
-        Tests_Registry_Handle_WriteValues(moduleContext->DmfModuleRegistry, registryHandle);
+        PLUGPLAY_REGKEY_DEVICE | PLUGPLAY_REGKEY_CURRENT_HWPROFILE,
+        PLUGPLAY_REGKEY_DRIVER | PLUGPLAY_REGKEY_CURRENT_HWPROFILE
+    };
 
-        // Get sizes of values to read.
-        //
-        Tests_Registry_Handle_ReadAndValidateBytesRead(moduleContext->DmfModuleRegistry, registryHandle);
+    for (ULONG predefinedIdIndex = 0; predefinedIdIndex < ARRAYSIZE(predefinedIds); predefinedIdIndex++)
+    {
+        if (0 == predefinedIdIndex)
+        {
+            // Zero means open from the hard coded path.
+            //
+            ntStatus = DMF_Registry_HandleOpenByNameEx(moduleContext->DmfModuleRegistry,
+                                                       REGISTRY_PATH_NAME,
+                                                       GENERIC_ALL,
+                                                       TRUE,
+                                                       &registryHandle);
+        }
+        else
+        {
+            // Open the predefined key.
+            //
+            ntStatus = DMF_Registry_HandleOpenById(moduleContext->DmfModuleRegistry,
+                                                   predefinedIds[predefinedIdIndex],
+                                                   GENERIC_ALL,
+                                                   &registryHandle);
+        }
+        ASSERT(NT_SUCCESS(ntStatus));
+        ASSERT(registryHandle != NULL);
+        if (registryHandle != NULL)
+        {
+            // Delete values.
+            //
+            Tests_Registry_Handle_DeleteValues(moduleContext->DmfModuleRegistry,
+                                               registryHandle);
 
-        // Read values and compare to original with NULL bytesRead.
-        //
-        Tests_Registry_Handle_ReadAndValidateData(moduleContext->DmfModuleRegistry, registryHandle);
+            // Now, try to read some non-existent values.
+            //
+            Tests_Registry_Handle_ReadNonExistent(moduleContext->DmfModuleRegistry,
+                                                  registryHandle);
 
-        // Read values and compare to original with bytesRead.
-        //
-        Tests_Registry_Handle_ReadAndValidateDataAndBytesRead(moduleContext->DmfModuleRegistry, registryHandle);
+            // Write the values.
+            //
+            Tests_Registry_Handle_WriteValues(moduleContext->DmfModuleRegistry,
+                                              registryHandle);
 
-        // Try to read to small buffers with NULL bytesRead.
-        //
-        Tests_Registry_Handle_ReadSmallBufferWithoutBytesRead(moduleContext->DmfModuleRegistry, registryHandle);
+            // Get sizes of values to read.
+            //
+            Tests_Registry_Handle_ReadAndValidateBytesRead(moduleContext->DmfModuleRegistry,
+                                                           registryHandle);
 
-        // Try to read to small buffers with bytesRead.
-        //
-        Tests_Registry_Handle_ReadSmallBufferWithBytesRead(moduleContext->DmfModuleRegistry, registryHandle);
+            // Read values and compare to original with NULL bytesRead.
+            //
+            Tests_Registry_Handle_ReadAndValidateData(moduleContext->DmfModuleRegistry,
+                                                      registryHandle);
 
-        // Delete everything we wrote and make sure it was deleted
-        //
-        Tests_Registry_Handle_DeleteValues(moduleContext->DmfModuleRegistry, registryHandle);
-        Tests_Registry_Handle_ReadNonExistent(moduleContext->DmfModuleRegistry, registryHandle);
+            // Read values and compare to original with bytesRead.
+            //
+            Tests_Registry_Handle_ReadAndValidateDataAndBytesRead(moduleContext->DmfModuleRegistry,
+                                                                  registryHandle);
 
-        Tests_Registry_Handle_DeletePath(moduleContext->DmfModuleRegistry, registryHandle);
-        Tests_Registry_ValidatePathDeleted(moduleContext->DmfModuleRegistry);
+            // Try to read to small buffers with NULL bytesRead.
+            //
+            Tests_Registry_Handle_ReadSmallBufferWithoutBytesRead(moduleContext->DmfModuleRegistry,
+                                                                  registryHandle);
 
-        DMF_Registry_HandleClose(moduleContext->DmfModuleRegistry,
-                                 registryHandle);
-        registryHandle = NULL;
+            // Try to read to small buffers with bytesRead.
+            //
+            Tests_Registry_Handle_ReadSmallBufferWithBytesRead(moduleContext->DmfModuleRegistry,
+                                                               registryHandle);
+
+            // Delete everything we wrote and make sure it was deleted.
+            //
+            Tests_Registry_Handle_DeleteValues(moduleContext->DmfModuleRegistry,
+                                               registryHandle);
+            Tests_Registry_Handle_ReadNonExistent(moduleContext->DmfModuleRegistry,
+                                                  registryHandle);
+
+            // Driver is not allowed to delete predefined keys.
+            //
+            if (0 == predefinedIdIndex)
+            {
+                Tests_Registry_Handle_DeletePath(moduleContext->DmfModuleRegistry,
+                                                 registryHandle);
+                Tests_Registry_ValidatePathDeleted(moduleContext->DmfModuleRegistry);
+            }
+
+            DMF_Registry_HandleClose(moduleContext->DmfModuleRegistry,
+                                     registryHandle);
+            registryHandle = NULL;
+        }
     }
-
 
     // Tree Tests
     // ----------
@@ -1956,6 +2001,11 @@ Tests_Registry_WorkThread(
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
+// WDF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
 // DMF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -2051,13 +2101,80 @@ Return Value:
 }
 #pragma code_seg()
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_Tests_Registry_ChildModulesAdd(
+    _In_ DMFMODULE DmfModule,
+    _In_ DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+    _In_ PDMFMODULE_INIT DmfModuleInit
+    )
+/*++
 
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Tests_Registry;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Tests_Registry;
+Routine Description:
+
+    Configure and add the required Child Modules to the given Parent Module.
+
+Arguments:
+
+    DmfModule - The given Parent Module.
+    DmfParentModuleAttributes - Pointer to the parent DMF_MODULE_ATTRIBUTES structure.
+    DmfModuleInit - Opaque structure to be passed to DMF_DmfModuleAdd.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_MODULE_ATTRIBUTES moduleAttributes;
+    DMF_CONTEXT_Tests_Registry* moduleContext;
+    DMF_CONFIG_AlertableSleep moduleConfigAlertableSleep;
+    DMF_CONFIG_Thread moduleConfigThread;
+
+    UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    // AlertableSleep
+    // ---------------
+    //
+    DMF_CONFIG_AlertableSleep_AND_ATTRIBUTES_INIT(&moduleConfigAlertableSleep, 
+                                                  &moduleAttributes);
+    moduleConfigAlertableSleep.EventCount = 1;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                     &moduleAttributes,
+                     WDF_NO_OBJECT_ATTRIBUTES,
+                     &moduleContext->DmfModuleAlertableSleep);
+
+    // Thread
+    // ------
+    //
+    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
+                                          &moduleAttributes);
+    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
+    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_Registry_WorkThread;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                        &moduleAttributes,
+                        WDF_NO_OBJECT_ATTRIBUTES,
+                        &moduleContext->DmfModuleThread);
+
+    // Registry
+    // --------
+    //
+    DMF_Registry_ATTRIBUTES_INIT(&moduleAttributes);
+    DMF_DmfModuleAdd(DmfModuleInit,
+                        &moduleAttributes,
+                        WDF_NO_OBJECT_ATTRIBUTES,
+                        &moduleContext->DmfModuleRegistry);
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -2093,111 +2210,35 @@ Return Value:
 
 --*/
 {
-    DMFMODULE dmfModule;
-    DMF_CONTEXT_Tests_Registry* moduleContext;
-    WDF_OBJECT_ATTRIBUTES objectAttributes;
-    DMF_MODULE_ATTRIBUTES moduleAttributes;
-    DMF_CONFIG_AlertableSleep moduleConfigAlertableSleep;
-    DMF_CONFIG_Thread moduleConfigThread;
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Tests_Registry;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Tests_Registry;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    dmfModule = NULL;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Tests_Registry);
+    dmfCallbacksDmf_Tests_Registry.ChildModulesAdd = DMF_Tests_Registry_ChildModulesAdd;
+    dmfCallbacksDmf_Tests_Registry.DeviceOpen = Tests_Registry_Open;
+    dmfCallbacksDmf_Tests_Registry.DeviceClose = Tests_Registry_Close;
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Tests_Registry);
-    DmfCallbacksDmf_Tests_Registry.DeviceOpen = Tests_Registry_Open;
-    DmfCallbacksDmf_Tests_Registry.DeviceClose = Tests_Registry_Close;
-
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Tests_Registry,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Tests_Registry,
                                             Tests_Registry,
                                             DMF_CONTEXT_Tests_Registry,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Tests_Registry.CallbacksDmf = &DmfCallbacksDmf_Tests_Registry;
+    dmfModuleDescriptor_Tests_Registry.CallbacksDmf = &dmfCallbacksDmf_Tests_Registry;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Tests_Registry,
-                                &dmfModule);
+                                &dmfModuleDescriptor_Tests_Registry,
+                                DmfModule);
     if (!NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    moduleContext = DMF_CONTEXT_GET(dmfModule);
-
-    // Create child modules
-    //
-
-    // DmfModule will be set as ParentObject for all child modules.
-    //
-    WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
-    objectAttributes.ParentObject = dmfModule;
-
-    // Alertable sleep
-    // ---------------
-    //
-    DMF_CONFIG_AlertableSleep_AND_ATTRIBUTES_INIT(&moduleConfigAlertableSleep, 
-                                                  &moduleAttributes);
-    moduleConfigAlertableSleep.EventCount = 1;
-    ntStatus = DMF_AlertableSleep_Create(Device,
-                                         &moduleAttributes,
-                                         &objectAttributes,
-                                         &moduleContext->DmfModuleAlertableSleep);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_AlertableSleep_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // Thread
-    // --------
-    //
-    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
-                                          &moduleAttributes);
-    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
-    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_Registry_WorkThread;
-    ntStatus = DMF_Thread_Create(Device,
-                                 &moduleAttributes,
-                                 &objectAttributes,
-                                 &moduleContext->DmfModuleThread);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_Thread_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // Registry
-    // --------
-    //
-    DMF_Registry_ATTRIBUTES_INIT(&moduleAttributes);
-    ntStatus = DMF_Registry_Create(Device,
-                                   &moduleAttributes,
-                                   &objectAttributes,
-                                   &moduleContext->DmfModuleRegistry);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_Registry_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-    
-    *DmfModule = dmfModule;
-
-Exit:
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        if (NULL != dmfModule)
-        {
-            DMF_Module_Destroy(dmfModule);
-            dmfModule = NULL;
-        }
     }
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);

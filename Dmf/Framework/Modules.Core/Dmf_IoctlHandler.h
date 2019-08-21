@@ -133,6 +133,9 @@ typedef enum
     // Allow access to Administrator on a per-IOCTL basis.
     //
     IoctlHandler_AccessModeFilterAdministratorOnlyPerIoctl,
+    // Restrict to Kernel-mode access only.
+    //
+    IoctlHandler_AccessModeFilterKernelModeOnly
 } IoctlHandler_AccessModeFilterType;
 
 // Client uses this structure to configure the Module specific parameters.
@@ -158,6 +161,10 @@ typedef struct
     // TRUE requires that the Client call DMF_IoctlHandler_IoctlsEnable() to enable the corresponding device interface.
     //
     BOOLEAN ManualMode;
+    // FALSE (Default) means that the corresponding device interface will handle all IOCTL types.
+    // TRUE means that the module allows only requests from kernel mode clients.
+    //
+    BOOLEAN KernelModeRequestsOnly;
     // Windows Store App access settings.
     //
     WCHAR* CustomCapabilities;

@@ -55,9 +55,17 @@ extern "C"
 //
 #pragma warning(disable:4201)
 
+// Check that the Windows version is Win10 or later. The supported versions are defined in sdkddkver.h.
+//
+#define IS_WIN10_OR_LATER (NTDDI_WIN10_RS3 && (NTDDI_VERSION >= NTDDI_WIN10))
+
 // Check that the Windows version is RS3 or later. The supported versions are defined in sdkddkver.h.
 //
 #define IS_WIN10_RS3_OR_LATER (NTDDI_WIN10_RS3 && (NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+// Check that the Windows version is RS5 or later. The supported versions are defined in sdkddkver.h.
+//
+#define IS_WIN10_RS5_OR_LATER (NTDDI_WIN10_RS5 && (NTDDI_VERSION >= NTDDI_WIN10_RS5))
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -68,11 +76,39 @@ extern "C"
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
+// Some environments use DBG instead of DEBUG. DMF uses DEBUG so, define DEBUG in that case.
+//
+#if DBG
+    #if !defined(DEBUG)
+        #define DEBUG
+    #endif
+#endif
+
 // All DMF Modules need these.
 //
 #include <stdlib.h>
 #include <sal.h>
 #if defined(DMF_USER_MODE)
+    #include <windows.h>
+    #include <stdio.h>
+    #include <wdf.h>
+    #include <Objbase.h>
+    // NOTE: This file includes poclass.h. Do not include that again
+    //       otherwise, redefinition errors will occur.
+    //
+    #include <batclass.h>
+    #include <hidclass.h>
+    #include <powrprof.h>
+    #include <usbiodef.h>
+    #include <cguid.h>
+    #include <guiddef.h>
+    #include <wdmguid.h>
+    #include <cfgmgr32.h>
+    #include <ndisguid.h>
+    #include <strsafe.h>
+    #include <ndisguid.h>
+    // TODO: Add support for USB in User Mode drivers.
+    //
     // Turn this on to debug asserts in UMDF.
     // Normal assert() causes a crash in UMDF which causes UMDF to just disable the driver
     // without showing what assert failed.
@@ -85,7 +121,7 @@ extern "C"
             #if defined(ASSERT)
                 #undef ASSERT
             #endif // defined(ASSERT)
-            #define ASSERT(X)   if (! (X)) {DebugBreak();};
+            #define ASSERT(X)   ((! (X)) ? DebugBreak() : TRUE)
         #else
             #if !defined(ASSERT)
                 // It means, use native assert().
@@ -98,22 +134,9 @@ extern "C"
         #if !defined(ASSERT)
             // It means, do not assert at all.
             //
-            #define ASSERT(X)
+            #define ASSERT(X) (VOID(0))
         #endif // !defined(ASSERT)
     #endif // defined(DEBUG)
-    #include <windows.h>
-    #include <wdf.h>
-    #include <hidclass.h>
-    #include <powrprof.h>
-    #include <stdio.h>
-    #include <Usbiodef.h>
-    #include <Guiddef.h>
-    #include <wdmguid.h>
-    #include <cfgmgr32.h>
-    #include <ndisguid.h>
-    #include <Strsafe.h>
-    // TODO: Add support for USB in User Mode drivers.
-    //
 #else
     #include <ntifs.h>
     #include <wdm.h>
@@ -125,6 +148,8 @@ extern "C"
     //
     #include <ntstrsafe.h>
     #include <wdf.h>
+    // NOTE: This file has be listed here. Listing it later causes many redefinition compilation errors.
+    //
     #include <acpiioct.h>
     #include <wmiguid.h>
     #include <ntddstor.h>
@@ -134,6 +159,10 @@ extern "C"
     #include <wdmguid.h>
     #include <ntddvdeo.h>
     #include <spb.h>
+    // NOTE: This file includes poclass.h. Do not include that again
+    //       otherwise, redefinition errors will occur.
+    //
+    #include <batclass.h>
     #include <hidport.h>
     #include "usbdi.h"
     #include "usbdlib.h"
@@ -146,7 +175,11 @@ extern "C"
 #endif // defined(DMF_USER_MODE)
 #include <hidusage.h>
 #include <hidpi.h>
-#include <devpkey.h>
+
+// NOTE: This is necessary in order to avoid redefinition errors. It is not clear why
+//       this is the case.
+//
+#define DEVPKEY_H_INCLUDED
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -206,6 +239,8 @@ typedef struct
 
 #define DECLARE_DMF_MODULE(ModuleName)                                                          \
                                                                                                 \
+WDF_DECLARE_CUSTOM_TYPE(ModuleName);                                                            \
+                                                                                                \
 _IRQL_requires_max_(PASSIVE_LEVEL)                                                              \
 _Must_inspect_result_                                                                           \
 NTSTATUS                                                                                        \
@@ -219,7 +254,7 @@ DMF_##ModuleName##_Create(                                                      
 __forceinline                                                                                   \
 VOID                                                                                            \
 DMF_##ModuleName##_ATTRIBUTES_INIT(                                                             \
-    _Out_ DMF_MODULE_ATTRIBUTES* Attributes                                                     \
+    _Out_ volatile DMF_MODULE_ATTRIBUTES* Attributes                                            \
     )                                                                                           \
 {                                                                                               \
     DMF_MODULE_ATTRIBUTES_INIT(Attributes,                                                      \
@@ -231,7 +266,7 @@ __forceinline                                                                   
 VOID                                                                                            \
 DMF_CONFIG_##ModuleName##_AND_ATTRIBUTES_INIT(                                                  \
     _Out_ DMF_CONFIG_##ModuleName##* ModuleConfig,                                              \
-    _Out_ DMF_MODULE_ATTRIBUTES* ModuleAttributes                                               \
+    _Out_ volatile DMF_MODULE_ATTRIBUTES* ModuleAttributes                                      \
     )                                                                                           \
 {                                                                                               \
     RtlZeroMemory(ModuleConfig,                                                                 \
@@ -241,6 +276,8 @@ DMF_CONFIG_##ModuleName##_AND_ATTRIBUTES_INIT(                                  
 }                                                                                               \
 
 #define DECLARE_DMF_MODULE_NO_CONFIG(ModuleName)                                                \
+                                                                                                \
+WDF_DECLARE_CUSTOM_TYPE(ModuleName);                                                            \
                                                                                                 \
 _IRQL_requires_max_(PASSIVE_LEVEL)                                                              \
 _Must_inspect_result_                                                                           \
@@ -268,8 +305,11 @@ typedef NTSTATUS DMF_ModuleInstanceCreate(_In_ WDFDEVICE Device,
                                           _In_ WDF_OBJECT_ATTRIBUTES* ObjectAttributes, 
                                           _Out_ DMFMODULE* DmfModule);
 
-typedef NTSTATUS DMF_ModuleTransportsCreate(_In_ DMFMODULE DmfModule);
+typedef VOID DMF_TransportModuleAdd(_In_ DMFMODULE DmfModule,
+                                    _In_ struct _DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+                                    _In_ PVOID DmfModuleInit);
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
 typedef NTSTATUS DMF_ModuleTransportMethod(_In_ DMFMODULE DmfModule,
                                            _In_ ULONG Message,
                                            _In_reads_(InputBufferSize) VOID* InputBuffer,
@@ -282,7 +322,7 @@ typedef struct _DMF_MODULE_ATTRIBUTES
     // Size of this Structure.
     //
     ULONG SizeOfHeader; 
-    // It is a pointer to the Module Specific config.
+    // It is a pointer to the Module Specific Config.
     //
     VOID* ModuleConfigPointer;
     // It is the size of the Module Specific Config which is pointed to 
@@ -309,29 +349,36 @@ typedef struct _DMF_MODULE_ATTRIBUTES
     // are not part of a Module Collection.
     // Dynamic Modules have special code paths so this flag is necessary.
     //
+    BOOLEAN DynamicModuleImmediate;
+    // A flag to indicate if the a Module in the parent path was created dynamically. 
+    //
     BOOLEAN DynamicModule;
     // When a Module Transport is required, this callback must be set so that the 
     // Client can attach Transport Modules.
     //
-    DMF_ModuleTransportsCreate* TransportsCreator;
+    DMF_TransportModuleAdd* TransportModuleAdd;
     // TRUE if Client wants the Module options to be set to MODULE_OPTIONS_PASSIVE.
     // NOTE: Module Options must be set to MODULE_OPTIONS_DISPATCH_MAXIMUM.
     //
     BOOLEAN PassiveLevel;
+    // Indicates that this Module is a Transport Module.
+    //
+    BOOLEAN IsTransportModule;
 } DMF_MODULE_ATTRIBUTES;
 
 __forceinline
 VOID
 DMF_MODULE_ATTRIBUTES_INIT(
-    _Out_ DMF_MODULE_ATTRIBUTES* Attributes,
+    _Out_ volatile DMF_MODULE_ATTRIBUTES* Attributes,
     _In_ ULONG SizeOfModuleSpecificConfig
     ) 
 {
-    RtlZeroMemory(Attributes, 
+    RtlZeroMemory((void*)Attributes, 
                   sizeof(DMF_MODULE_ATTRIBUTES));
     Attributes->SizeOfHeader = sizeof(DMF_MODULE_ATTRIBUTES);
     Attributes->SizeOfModuleSpecificConfig = SizeOfModuleSpecificConfig;
     Attributes->ClientModuleInstanceName = DMF_CLIENT_MODULE_INSTANCE_NAME_DEFAULT;
+    Attributes->DynamicModuleImmediate = TRUE;
     Attributes->DynamicModule = TRUE;
     Attributes->ClientCallbacks = NULL;
 }
@@ -725,11 +772,308 @@ DMF_ParentModuleGet(
     _In_ DMFMODULE DmfModule
     );
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// DMF Interface Definitions
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+// Basic Interface Definitions
+// ---------------------------
+//
+
+// Declare an opaque handle representing a DMFMODULE (DMF_OBJECT). This is an opaque handle for the Clients.
+//
+DECLARE_HANDLE(DMFINTERFACE);
+
+// Structures used by DMF Core.
+//
+
+typedef enum
+{
+    InterfaceState_Invalid = 0,
+    // The Interface has been created.
+    //
+    InterfaceState_Created,
+    // The Interface is about to open.
+    //
+    InterfaceState_Opening,
+    // The Interface has been opened.
+    //
+    InterfaceState_Opened,
+    // The Interface is about to close.
+    //
+    InterfaceState_Closing,
+    // The Interface has been closed.
+    //
+    InterfaceState_Closed,
+    // The Interface has been destroyed.
+    //
+    InterfaceState_Destroyed,
+    // Sentinel.
+    //
+    InterfaceState_Last
+} InterfaceStateType;
+
+typedef enum
+{
+    Interface_Invalid = 0,
+    // The Interface is a Transport.
+    //
+    Interface_Transport,
+    // The Interface is a Protocol.
+    //
+    Interface_Protocol,
+    // Sentinel.
+    //
+    Interface_Last
+} InterfaceType;
+
+// Function used to initiate binding from the Interface Protocol.
+//
+typedef
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID
-DMF_Module_Destroy(
-    _In_ DMFMODULE DmfModule
+_IRQL_requires_same_
+NTSTATUS
+EVT_DMF_INTERFACE_ProtocolBind(
+    _In_ DMFINTERFACE DmfInterface
     );
+
+// Function used to unbind two Modules.
+//
+typedef
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_ProtocolUnbind(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+// Function used to Notify the Protocol and Transport Modules that binding is complete.
+//
+typedef
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_PostBind(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+// Function used to Notify the Protocol and Transport Modules that unbinding is about to start.
+//
+typedef
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_PreUnbind(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+// A generic Interface Descriptor.
+//
+typedef struct _DMF_INTERFACE_DESCRIPTOR
+{
+    // This structure is wrapped by multiple structures. 
+    // The size represents the size of the outer most structure. 
+    //
+    ULONG Size;
+    // Name of this Interface.
+    //
+    PSTR InterfaceName;
+    // Type of this Interface.
+    //
+    InterfaceType InterfaceType;
+    // WDF Object attributes describing the Declaration Data (Calls supported by this Interface).
+    //
+    WDF_OBJECT_ATTRIBUTES DeclarationDataWdfAttributes;
+    // If set, it means module has set ModuleInterfaceContextWdfAttributes
+    //
+    BOOLEAN ModuleInterfaceContextSet;
+    // WDF Object attributes describing the Module's Interface context.
+    // A context will be allocated for each DMFINTERFACE instance. 
+    //
+    WDF_OBJECT_ATTRIBUTES ModuleInterfaceContextWdfAttributes;
+    // Callback used to Notify the Module that Binding is complete.
+    //
+    EVT_DMF_INTERFACE_PostBind* DmfInterfacePostBind;
+    // Callback used to Notify the Module that Unbinding is about to start.
+    //
+    EVT_DMF_INTERFACE_PreUnbind* DmfInterfacePreUnbind;
+} DMF_INTERFACE_DESCRIPTOR;
+
+// Transport specific Interface Descriptor.
+//
+typedef struct _DMF_INTERFACE_TRANSPORT_DESCRIPTOR
+{
+    // Common Interface Attributes.
+    //
+    DMF_INTERFACE_DESCRIPTOR GenericInterfaceDescriptor;
+} DMF_INTERFACE_TRANSPORT_DESCRIPTOR;
+
+// Protocol specific Interface Descriptor.
+//
+typedef struct _DMF_INTERFACE_PROTOCOL_DESCRIPTOR
+{
+    // Common Interface Attributes.
+    //
+    DMF_INTERFACE_DESCRIPTOR GenericInterfaceDescriptor;
+    // Pointer to Interface Protocol's Bind function.
+    //
+    EVT_DMF_INTERFACE_ProtocolBind* DmfInterfaceProtocolBind;
+    // Pointer to Interface Protocol's Unbind function.
+    //
+    EVT_DMF_INTERFACE_ProtocolUnbind* DmfInterfaceProtocolUnbind;
+} DMF_INTERFACE_PROTOCOL_DESCRIPTOR;
+
+// Module Methods.
+// ---------------
+#define DMF_INTERFACE_PROTOCOL_DESCRIPTOR_INIT(                                                 \
+        DmfProtocolDescriptor,                                                                  \
+        InterfaceName,                                                                          \
+        DeclarationDataType,                                                                    \
+        EvtProtocolBind,                                                                        \
+        EvtProtocolUnbind,                                                                      \
+        EvtPostBind,                                                                            \
+        EvtPreUnbind                                                                            \
+        )                                                                                       \
+    DMF_INTERFACE_PROTOCOL_DESCRIPTOR_INIT_INTERNAL(                                            \
+        DmfProtocolDescriptor,                                                                  \
+        InterfaceName,                                                                          \
+        sizeof(DeclarationDataType),                                                            \
+        EvtProtocolBind,                                                                        \
+        EvtProtocolUnbind,                                                                      \
+        EvtPostBind,                                                                            \
+        EvtPreUnbind                                                                            \
+        );                                                                                      \
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(                                                    \
+        &(((DMF_INTERFACE_DESCRIPTOR*)(DmfProtocolDescriptor))->DeclarationDataWdfAttributes),  \
+        DeclarationDataType);
+
+#define DMF_INTERFACE_TRANSPORT_DESCRIPTOR_INIT(                                                \
+        DmfTransportDescriptor,                                                                 \
+        InterfaceName,                                                                          \
+        DeclarationDataType,                                                                    \
+        EvtPostBind,                                                                            \
+        EvtPreUnbind                                                                            \
+        )                                                                                       \
+    DMF_INTERFACE_TRANSPORT_DESCRIPTOR_INIT_INTERNAL(                                           \
+        DmfTransportDescriptor,                                                                 \
+        InterfaceName,                                                                          \
+        sizeof(DeclarationDataType),                                                            \
+        EvtPostBind,                                                                            \
+        EvtPreUnbind                                                                            \
+        );                                                                                      \
+                                                                                                \
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(                                                    \
+        &(((DMF_INTERFACE_DESCRIPTOR*)(DmfTransportDescriptor))->DeclarationDataWdfAttributes), \
+        DeclarationDataType                                                                     \
+        );
+
+#define DMF_INTERFACE_DESCRIPTOR_SET_CONTEXT_TYPE(                                                      \
+        DmfInterfaceDescriptor,                                                                         \
+        ContextType                                                                                     \
+        )                                                                                               \
+    ((DMF_INTERFACE_DESCRIPTOR*)(DmfInterfaceDescriptor))->ModuleInterfaceContextSet = TRUE;            \
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(                                                            \
+        &(((DMF_INTERFACE_DESCRIPTOR*)(DmfInterfaceDescriptor))->ModuleInterfaceContextWdfAttributes),  \
+        ContextType);
+
+// Method to add an Interface.
+//
+NTSTATUS
+DMF_ModuleInterfaceDescriptorAdd(
+    _Inout_ DMFMODULE DmfModule,
+    _In_ DMF_INTERFACE_DESCRIPTOR* InterfaceDescriptor
+    );
+
+// Interface definitions and methods. 
+// ----------------------------------
+//
+
+// Defines an accessor methods for the Protocol and Transport Declaration Data. 
+//
+#define DECLARE_DMF_INTERFACE(InterfaceName)                                                                                                                                                 \
+                                                                                                                                                                                    \
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DMF_INTERFACE_PROTOCOL_##InterfaceName##_DECLARATION_DATA, ##InterfaceName##ProtocolDeclarationDataGet);                                             \
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DMF_INTERFACE_TRANSPORT_##InterfaceName##_DECLARATION_DATA, ##InterfaceName##TransportDeclarationDataGet);                                           \
+                                                                                                                                                                                    \
+
+// Methods used by DMF Interfaces.
+//
+DMFMODULE
+DMF_InterfaceTransportModuleGet(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+DMFMODULE
+DMF_InterfaceProtocolModuleGet(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+VOID*
+DMF_InterfaceTransportDeclarationDataGet(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+VOID*
+DMF_InterfaceProtocolDeclarationDataGet(
+    _In_ DMFINTERFACE DmfInterface
+    );
+
+NTSTATUS
+DMF_InterfaceReference(
+    _Inout_ DMFINTERFACE DmfInterface
+    );
+
+VOID
+DMF_InterfaceDereference(
+    _Inout_ DMFINTERFACE DmfInterface
+    );
+
+// Client Methods for Binding/Unbinding.
+// -------------------------------------
+//
+// Bind Protocol and Transport.
+//
+
+// Method to bind Protocol and Transport.
+//
+NTSTATUS
+DMF_ModuleInterfaceBind(
+    _In_ DMFMODULE ProtocolModule,
+    _In_ DMFMODULE TransportModule,
+    _In_ DMF_INTERFACE_PROTOCOL_DESCRIPTOR* ProtocolDescriptor,
+    _In_ DMF_INTERFACE_TRANSPORT_DESCRIPTOR* TransportDescriptor
+    );
+
+// Method to un-bind Protocol and Transport.
+//
+VOID
+DMF_ModuleInterfaceUnbind(
+    _In_ DMFMODULE ProtocolModule,
+    _In_ DMFMODULE TransportModule,
+    _In_ DMF_INTERFACE_PROTOCOL_DESCRIPTOR* ProtocolDescriptor,
+    _In_ DMF_INTERFACE_TRANSPORT_DESCRIPTOR* TransportDescriptor
+    );
+
+#define DMF_INTERFACE_BIND(ProtocolModule,                                                                                                                                          \
+                           TransportModule,                                                                                                                                         \
+                           InterfaceName)                                                                                                                                           \
+        DMF_ModuleInterfaceBind(ProtocolModule,                                                                                                                                     \
+                                TransportModule,                                                                                                                                    \
+                                (DMF_INTERFACE_PROTOCOL_DESCRIPTOR*)##InterfaceName##ProtocolDeclarationDataGet(ProtocolModule),                                                    \
+                                (DMF_INTERFACE_TRANSPORT_DESCRIPTOR*)##InterfaceName##TransportDeclarationDataGet(TransportModule))                                                 \
+                                                                                                                                                                                    \
+
+// Un-bind Protocol and Transport.
+//
+#define DMF_INTERFACE_UNBIND(ProtocolModule,                                                                                                                                        \
+                             TransportModule,                                                                                                                                       \
+                             InterfaceName)                                                                                                                                         \
+        DMF_ModuleInterfaceUnbind(ProtocolModule,                                                                                                                                   \
+                                  TransportModule,                                                                                                                                  \
+                                  (DMF_INTERFACE_PROTOCOL_DESCRIPTOR*)##InterfaceName##ProtocolDeclarationDataGet(ProtocolModule),                                                  \
+                                  (DMF_INTERFACE_TRANSPORT_DESCRIPTOR*)##InterfaceName##TransportDeclarationDataGet(TransportModule))                                               \
+                                                                                                                                                                                    \
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // DMF Features
@@ -829,7 +1173,6 @@ DMF_DmfDeviceInitAllocate(
     );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-
 PDMFDEVICE_INIT 
 DMF_DmfControlDeviceInitAllocate(
     _In_opt_ PWDFDEVICE_INIT DeviceInit
@@ -899,6 +1242,15 @@ DMF_ModulesCreate(
     _In_ PDMFDEVICE_INIT* DmfDeviceInit
     );
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+NTSTATUS
+DMF_ModuleConfigRetrieve(
+    _In_ DMFMODULE DmfModule,
+    _Out_writes_(ModuleConfigSize) PVOID ModuleConfigPointer,
+    _In_ size_t ModuleConfigSize
+    );
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Filter Driver Support (FilterControl API)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -950,6 +1302,19 @@ typedef struct _DMF_PORTABLE_LOOKASIDELIST
     WDFLOOKASIDE WdflookasideList;
 #endif // defined(DMF_USER_MODE)
 } DMF_PORTABLE_LOOKASIDELIST;
+
+typedef struct _DMF_PORTABLE_RUNDOWN
+{
+#if !defined(DMF_USER_MODE)
+    EX_RUNDOWN_REF RundownRef;
+#else
+    // TODO: Equivalent code will go here. Change is pending.
+    //       Until then, Client must implement another solution
+    //       in User-mode.
+    //
+    ULONG PlaceHolder;
+#endif // !defined(DMF_USER_MODE)
+} DMF_PORTABLE_RUNDOWN_REF;
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID 
@@ -1025,16 +1390,46 @@ DMF_Portable_LookasideListCreateMemory(
     _Out_ WDFMEMORY* Memory
     );
 
+VOID
+DMF_Portable_Rundown_Initialize(
+    _Inout_ DMF_PORTABLE_RUNDOWN_REF* RundownRef
+    );
+
+VOID
+DMF_Portable_Rundown_Reinitialize(
+    _Inout_ DMF_PORTABLE_RUNDOWN_REF* RundownRef
+    );
+
+BOOLEAN
+DMF_Portable_Rundown_Acquire(
+    _Inout_ DMF_PORTABLE_RUNDOWN_REF* RundownRef
+    );
+
+VOID
+DMF_Portable_Rundown_Release(
+    _Inout_ DMF_PORTABLE_RUNDOWN_REF* RundownRef
+    );
+
+VOID
+DMF_Portable_Rundown_WaitForRundownProtectionRelease(
+    _Inout_ DMF_PORTABLE_RUNDOWN_REF* RundownRef
+    );
+
+VOID
+DMF_Portable_Rundown_Completed(
+    _Inout_ DMF_PORTABLE_RUNDOWN_REF* RundownRef
+    );
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Invoke Api prototypes 
+// "Invoke" API prototypes 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
 NTSTATUS
 DMF_Invoke_DeviceCallbacksCreate(
     _In_ WDFDEVICE Device,
-    _In_ WDFCMRESLIST ResourcesRaw,
-    _In_ WDFCMRESLIST ResourcesTranslated,
+    _In_opt_ WDFCMRESLIST ResourcesRaw,
+    _In_opt_ WDFCMRESLIST ResourcesTranslated,
     _In_ WDF_POWER_DEVICE_STATE PreviousState
     );
 
@@ -1072,7 +1467,7 @@ DMF_Invoke_DeviceCallbacksDestroy(
 #define DMF_EVENTLOG_FORMAT_STRINGS_NULL                    (NULL)
 #define DMF_EVENTLOG_TEXT_NULL                              (NULL)
 #define DMF_EVENTLOG_MAXIMUM_NUMBER_OF_INSERTION_STRINGS    (8)
-#define DMF_EVENTLOG_MAXIMUM_INSERTION_STRING_LENGTH        (60)
+#define DMF_EVENTLOG_MAXIMUM_INSERTION_STRING_LENGTH        (300)
 #define DMF_EVENTLOG_MAXIMUM_BYTES_IN_INSERTION_STRING      (DMF_EVENTLOG_MAXIMUM_INSERTION_STRING_LENGTH  * sizeof(WCHAR))
 
 _Must_inspect_result_
@@ -1196,11 +1591,12 @@ DMF_Utility_EventLogEntryWriteUserMode(
 // LIST_ENTRY functions for User-Mode. (These are copied as-is from Wdm.h.
 // Some Modules use LIST_ENTRY. To make those Modules work with both Kernel-mode and User-mode, these
 // definitions are included here.)
+// LIST_ENTRY functions are defined in UMDF starting from v23
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
-#if defined DMF_USER_MODE
+#if defined(DMF_USER_MODE) && UMDF_VERSION_MINOR < 23
 
 FORCEINLINE
 VOID

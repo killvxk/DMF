@@ -28,6 +28,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\Modules.Library\Dmf_DefaultTarget.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_InterruptResource.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_PingPongBuffer.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_HidPortableDeviceButtons.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_CrashDump.c" />
@@ -45,14 +46,19 @@
     <ClCompile Include="..\..\Modules.Library\Dmf_ContinuousRequestTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_RequestTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_ResourceHub.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_Rundown.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_ScheduledTask.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_SelfTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_SerialTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_SmbiosWmi.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_SpbTarget.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_SpiTarget.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_String.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_ThermalCoolingInterface.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_Thread.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_NotifyUserWithRequest.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_VirtualHidAmbientColorSensor.c" />
+    <ClCompile Include="..\..\Modules.Library\Dmf_VirtualHidAmbientLightSensor.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_VirtualHidDeviceVhf.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_VirtualHidKeyboard.c" />
     <ClCompile Include="..\..\Modules.Library\Dmf_Wmi.c" />
@@ -60,6 +66,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\Modules.Library\Dmf_DefaultTarget.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_InterruptResource.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_PingPongBuffer.h" />
     <ClInclude Include="..\..\Modules.Library\DmfModules.Library.h" />
     <ClInclude Include="..\..\Modules.Library\DmfModules.Library.Public.h" />
@@ -80,14 +87,19 @@
     <ClInclude Include="..\..\Modules.Library\Dmf_ContinuousRequestTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_RequestTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_ResourceHub.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_Rundown.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_ScheduledTask.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_SelfTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_SerialTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_SmbiosWmi.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_SpbTarget.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_SpiTarget.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_String.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_ThermalCoolingInterface.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_Thread.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_NotifyUserWithRequest.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_VirtualHidAmbientColorSensor.h" />
+    <ClInclude Include="..\..\Modules.Library\Dmf_VirtualHidAmbientLightSensor.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_VirtualHidDeviceVhf.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_VirtualHidKeyboard.h" />
     <ClInclude Include="..\..\Modules.Library\Dmf_Wmi.h" />
@@ -169,7 +181,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_X86_=1;i386=1;STD_CALL;DEBUG;DBG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -198,7 +210,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;DEBUG;DBG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -227,7 +239,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;DEBUG;DBG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -256,7 +268,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_X86_=1;i386=1;STD_CALL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -285,7 +297,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -314,7 +326,7 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)'  == ''">..\..\Framework\DmfTrace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <PreprocessorDefinitions>_WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);..\..\Modules;..\..\Framework;..\..\Framework\Modules.Core</AdditionalIncludeDirectories>
       <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level4</WarningLevel>
       <WppPreprocessorDefinitions>%(WppPreprocessorDefinitions)</WppPreprocessorDefinitions>
@@ -375,6 +387,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\Modules.Library\Dmf_DefaultTarget.md" />
+    <None Include="..\..\Modules.Library\Dmf_InterruptResource.md" />
+    <None Include="..\..\Modules.Library\Dmf_Rundown.md" />
+    <None Include="..\..\Modules.Library\Dmf_SpbTarget.md" />
+    <None Include="..\..\Modules.Library\Dmf_String.md" />
+    <None Include="..\..\Modules.Library\Dmf_VirtualHidAmbientColorSensor.md" />
+    <None Include="..\..\Modules.Library\Dmf_VirtualHidAmbientLightSensor.md" />
     <None Include="..\..\Modules.Library\Dmf_VirtualHidKeyboard.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

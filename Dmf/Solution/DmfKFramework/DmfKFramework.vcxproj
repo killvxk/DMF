@@ -27,6 +27,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\Framework\DmfInterfaceInternal.c" />
     <ClCompile Include="..\..\Framework\Modules.Core\Dmf_BufferPool.c" />
     <ClCompile Include="..\..\Framework\Modules.Core\Dmf_BranchTrack.c" />
     <ClCompile Include="..\..\Framework\Modules.Core\Dmf_HashTable.c" />
@@ -310,12 +311,12 @@
     <FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
   </ItemGroup>
   <ItemGroup>
-    <Text Include="..\..\Framework\Modules.Core\Dmf_BufferPool.txt" />
-    <Text Include="..\..\Framework\Modules.Core\Dmf_RingBuffer.txt" />
-    <Text Include="..\..\Framework\Modules.Core\Dmf_HashTable.txt" />
-    <Text Include="..\..\Framework\Modules.Core\Dmf_IoctlHandler.txt" />
-    <Text Include="..\..\Framework\Modules.Core\Dmf_LiveKernelDump.txt" />
-    <Text Include="..\..\Framework\Modules.Core\Dmf_BufferQueue.txt" />
+    <Text Include="..\..\Framework\Modules.Core\Dmf_BufferPool.md" />
+    <Text Include="..\..\Framework\Modules.Core\Dmf_RingBuffer.md" />
+    <Text Include="..\..\Framework\Modules.Core\Dmf_HashTable.md" />
+    <Text Include="..\..\Framework\Modules.Core\Dmf_IoctlHandler.md" />
+    <Text Include="..\..\Framework\Modules.Core\Dmf_LiveKernelDump.md" />
+    <Text Include="..\..\Framework\Modules.Core\Dmf_BufferQueue.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

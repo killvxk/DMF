@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -558,7 +559,7 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -567,12 +568,40 @@ Return Value:
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static
+VOID
+DMF_Thread_Close(
+    _In_ DMFMODULE DmfModule
+    )
+/*++
 
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Thread;
+Routine Description:
+
+    Uninitialize an instance of a DMF Module of type Thread.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+
+Return Value:
+
+    None
+
+--*/
+{
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    // In case, Client has not explicitly stopped the thread, do that now.
+    //
+    Thread_ThreadDestroy(DmfModule);
+
+    FuncExitNoReturn(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -609,23 +638,28 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Thread;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Thread;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Thread,
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Thread);
+    dmfCallbacksDmf_Thread.DeviceClose = DMF_Thread_Close;
+
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Thread,
                                             Thread,
                                             DMF_CONTEXT_Thread,
                                             DMF_MODULE_OPTIONS_DISPATCH,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Thread.ModuleConfigSize = sizeof(DMF_CONFIG_Thread);
+    dmfModuleDescriptor_Thread.CallbacksDmf = &dmfCallbacksDmf_Thread;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Thread,
+                                &dmfModuleDescriptor_Thread,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -669,8 +703,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Thread);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Thread);
 
     threadStopPending = Thread_IsThreadStopPending(DmfModule);
 
@@ -709,8 +743,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Thread);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Thread);
 
     ntStatus = Thread_ThreadCreate(DmfModule);
 
@@ -746,8 +780,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Thread);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Thread);
 
     Thread_ThreadDestroy(DmfModule);
 
@@ -782,8 +816,8 @@ Return Value:
 
     // By design this Method can be called by Close callback.
     //
-    DMF_HandleValidate_ClosingOk(DmfModule,
-                                 &DmfModuleDescriptor_Thread);
+    DMFMODULE_VALIDATE_IN_METHOD_CLOSING_OK(DmfModule,
+                                            Thread);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

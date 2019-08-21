@@ -9,10 +9,14 @@ Module Name:
 
 Abstract:
 
-    DMF Implementation.
+    DMF Implementation:
+
     This Module contains the default (generic) handlers for all DMF Module Callbacks.
     This allows DMF to perform validation, prevents the need for NULL pointer checking,
     and allows DMF to automatically support Module Callbacks as needed.
+
+    NOTE: Make sure to set "compile as C++" option.
+    NOTE: Make sure to #define DMF_USER_MODE in UMDF Drivers.
 
 Environment:
 
@@ -41,7 +45,7 @@ Environment:
 //
 
 // Generic Callbacks. These handlers may be overridden by Client.
-// ----------------------------------------------------------------
+// --------------------------------------------------------------
 //
 
 #pragma code_seg("PAGE")
@@ -191,6 +195,82 @@ Return Value:
 }
 #pragma code_seg()
 
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_Generic_PostBind(
+    _In_ DMFINTERFACE DmfInterface
+    )
+/*++
+
+Routine Description:
+
+    Generic callback for EvtInterfacePostBind.
+    It is a NOP.
+
+Arguments:
+
+    DmfModule - DMF Module
+
+Return Value:
+
+    None
+
+--*/
+{
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DmfInterface);
+
+    FuncEntryArguments(DMF_TRACE, "DmfInterface=0x%p", DmfInterface);
+
+    // It is OK for this function to be called as NOP.
+    //
+
+    FuncExit(DMF_TRACE, "DmfInterface=0x%p ntStatus=%!STATUS!", DmfInterface, STATUS_SUCCESS);
+
+}
+#pragma code_seg()
+
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+VOID
+EVT_DMF_INTERFACE_Generic_PreUnbind(
+    _In_ DMFINTERFACE DmfInterface
+    )
+/*++
+
+Routine Description:
+
+    Generic callback for EvtInterfacePreUnbind.
+    It is a NOP.
+
+Arguments:
+
+    DmfModule - DMF Module
+
+Return Value:
+
+    None
+
+--*/
+{
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DmfInterface);
+
+    FuncEntryArguments(DMF_TRACE, "DmfInterface=0x%p", DmfInterface);
+
+    // It is OK for this function to be called as NOP.
+    //
+
+    FuncExit(DMF_TRACE, "DmfInterface=0x%p ntStatus=%!STATUS!", DmfInterface, STATUS_SUCCESS);
+
+}
+#pragma code_seg()
+
 VOID
 DMF_Generic_Destroy(
     _In_ DMFMODULE DmfModule
@@ -200,11 +280,6 @@ DMF_Generic_Destroy(
 Routine Description:
 
     Generic callback for ModuleInstanceDestroy for a given DMF Module.
-
-    NOTE: If this code executes it is an invalid code path. Every DMF Module should
-          have a Destroy callback.
-    TODO: I think, given current architecture, that we can provide a function that does the
-          work since all DMF Modules Destroy callbacks perform the same operation.
 
 Arguments:
 
@@ -224,12 +299,6 @@ Return Value:
 
     DMF_HandleValidate_IsCreatedOrClosed(dmfObject);
 
-    DMF_ModuleDestroy(DmfModule);
-    dmfObject = NULL;
-
-    // NOTE: Do not output ClientDriverModuleInstanceName because the memory for the handle
-    //       has been deleted.
-    //
     FuncExit(DMF_TRACE, "DmfModule=0x%p ntStatus=%!STATUS!", DmfModule, STATUS_SUCCESS);
 }
 
@@ -277,7 +346,9 @@ Return Value:
 
     FuncEntryArguments(DMF_TRACE, "DmfModule=0x%p [%s]", DmfModule, dmfObject->ClientModuleInstanceName);
 
-    DMF_HandleValidate_IsCreatedOrOpened(dmfObject);
+    // This is needed for cases where Module Opens, Close and Opens again.
+    //
+    DMF_HandleValidate_IsCreatedOrOpenedOrClosed(dmfObject);
 
     UNREFERENCED_PARAMETER(ResourcesRaw);
     UNREFERENCED_PARAMETER(ResourcesTranslated);
@@ -416,6 +487,9 @@ Return Value:
         if (dmfObject->ModuleOpenedDuring == ModuleOpenedDuringType_PrepareHardware)
         {
             DMF_Internal_Close(DmfModule);
+            // This is needed for cases where Module Opens, Close and Opens again.
+            //
+            dmfObject->ModuleOpenedDuring = ModuleOpenedDuringType_Invalid;
         }
     }
     else if (DMF_MODULE_OPEN_OPTION_NOTIFY_PrepareHardware == dmfObject->ModuleDescriptor.OpenOption)
@@ -423,6 +497,9 @@ Return Value:
         // This Module's Notification Registration is automatically closed in PrepareHardware.
         //
         DMF_Internal_NotificationUnregister(DmfModule);
+        // This is needed for cases where Module Opens, Close and Opens again.
+        //
+        dmfObject->ModuleNotificationRegisteredDuring = ModuleOpenedDuringType_Invalid;
     }
     else if (dmfObject->ModuleDescriptor.OpenOption < DMF_MODULE_OPEN_OPTION_LAST)
     {
@@ -474,6 +551,8 @@ Return Value:
 {
     NTSTATUS ntStatus;
     DMF_OBJECT* dmfObject;
+    WDFDEVICE device;
+    POWER_ACTION powerAction;
 
     dmfObject = DMF_ModuleToObject(DmfModule);
 
@@ -483,10 +562,49 @@ Return Value:
     //
     DMF_HandleValidate_IsCreatedOrOpenedOrClosed(dmfObject);
 
+    device = DMF_ParentDeviceGet(DmfModule);
+
     // NOTE: If the Module has a ResourceAssign handler, it will have been called by now.
     //
+    if (DMF_MODULE_OPEN_OPTION_OPEN_D0EntrySystemPowerUp == dmfObject->ModuleDescriptor.OpenOption)
+    {
+        powerAction = WdfDeviceGetSystemPowerAction(device);
 
-    if (DMF_MODULE_OPEN_OPTION_OPEN_D0Entry == dmfObject->ModuleDescriptor.OpenOption)
+        // Open the module on first boot (WdfPowerDeviceD3Final)
+        // and on wake from hibernate. 
+        // In cases where WdfDeviceGetSystemPowerAction fails to report wake from hibernate,
+        // open the Module if its in closed state. 
+        //
+        if (PreviousState == WdfPowerDeviceD3Final ||
+            ((PreviousState == WdfPowerDeviceD3) &&
+             (powerAction == PowerActionHibernate || dmfObject->ModuleState == ModuleState_Closed)
+            )
+           )
+        {
+            // This Module is automatically opened in D0Entry on power up.
+            //
+            ntStatus = DMF_Internal_Open(DmfModule);
+            if (!NT_SUCCESS(ntStatus))
+            {
+                TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleOpen ntStatus=%!STATUS!", ntStatus);
+            }
+            else
+            {
+                // Indicate when the Module was opened (for clean up operations).
+                // Internal Open has set this value to Manual by default.
+                //
+                ASSERT(ModuleOpenedDuringType_Manual == dmfObject->ModuleOpenedDuring);
+                dmfObject->ModuleOpenedDuring = ModuleOpenedDuringType_D0EntrySystemPowerUp;
+            }
+        }
+        else
+        {
+            // Do Nothing
+            //
+            ntStatus = STATUS_SUCCESS;
+        }
+    }
+    else if (DMF_MODULE_OPEN_OPTION_OPEN_D0Entry == dmfObject->ModuleDescriptor.OpenOption)
     {
         // This Module is automatically opened in D0Entry.
         //
@@ -653,6 +771,8 @@ Return Value:
 {
     DMF_OBJECT* dmfObject;
     NTSTATUS ntStatus;
+    WDFDEVICE device;
+    POWER_ACTION powerAction;
 
     dmfObject = DMF_ModuleToObject(DmfModule);
 
@@ -662,9 +782,23 @@ Return Value:
     //
     DMF_HandleValidate_IsCreatedOrOpenedOrClosed(dmfObject);
 
+    device = DMF_ParentDeviceGet(DmfModule);
+
     ntStatus = STATUS_SUCCESS;
 
-    if (DMF_MODULE_OPEN_OPTION_OPEN_D0Entry == dmfObject->ModuleDescriptor.OpenOption)
+    if (DMF_MODULE_OPEN_OPTION_OPEN_D0EntrySystemPowerUp == dmfObject->ModuleDescriptor.OpenOption)
+    {
+        powerAction = WdfDeviceGetSystemPowerAction(device);
+
+        if (TargetState == WdfPowerDeviceD3Final ||
+            (powerAction == PowerActionHibernate && TargetState == WdfPowerDeviceD3))
+        {
+            // This Module is automatically closed in D0Exit during power down.
+            //
+            DMF_Internal_Close(DmfModule);
+        }
+    }
+    else if (DMF_MODULE_OPEN_OPTION_OPEN_D0Entry == dmfObject->ModuleDescriptor.OpenOption)
     {
         // This Module is automatically closed in D0Exit.
         //
@@ -1794,7 +1928,9 @@ Return Value:
     UNREFERENCED_PARAMETER(ResourcesRaw);
     UNREFERENCED_PARAMETER(ResourcesTranslated);
 
-    DMF_HandleValidate_IsCreatedOrIsNotify(dmfObject);
+    // This is needed for cases where Module Opens, Close and Opens again.
+    //
+    DMF_HandleValidate_IsCreatedOrOpenedOrClosed(dmfObject);
 
     // This is called during PrepareHardware when the flag is used.
     //
@@ -1817,8 +1953,12 @@ DMF_Generic_NotificationRegister(
 Routine Description:
 
     Generic callback for NotificationRegister for a given DMF Module. This call can happen if the
-    Client has not set the NotificationRegister callback. (Client may decide to open the Module
-    for any reason, possibly unrelated to PnP, and may not need to support that call.)
+    Client has not set the NotificationRegister callback. NotificationRegister callback is optional
+    only for DMF_MODULE_OPEN_OPTION_NOTIFY_Create. (Client may decide to open the Module
+    for any reason, possibly unrelated to PnP, and may not need to support that call.).
+
+    If Client decides to open the Module in post open callback of a child Module, then the Module will 
+    already be open before this call. 
 
 Arguments:
 
@@ -1838,7 +1978,7 @@ Return Value:
 
     FuncEntryArguments(DMF_TRACE, "DmfModule=0x%p dmfObject=0x%p [%s]", DmfModule, dmfObject, dmfObject->ClientModuleInstanceName);
 
-    DMF_HandleValidate_IsCreatedOrClosed(dmfObject);
+    DMF_HandleValidate_IsCreatedOrOpenedOrClosed(dmfObject);
 
     FuncExit(DMF_TRACE, "DmfModule=0x%p dmfObject=0x%p [%s] ntStatus=%!STATUS!", DmfModule, dmfObject, dmfObject->ClientModuleInstanceName, STATUS_SUCCESS);
 
@@ -1857,8 +1997,8 @@ DMF_Generic_NotificationUnregister(
 Routine Description:
 
     Generic callback for NotificationUnregister for a given DMF Module. This call can happen if the
-    Client has not set the NotificationUnregister callback. (Client may decide to close the Module
-    for any reason, possibly unrelated to PnP, and may not need to support this call.)
+    Client has not set the NotificationUnregister callback. NotificationUnregister is optional. 
+    (Client may decide to close the Module for any reason, possibly unrelated to PnP, and may not need to support this call.)
 
 Arguments:
 
@@ -1878,7 +2018,7 @@ Return Value:
 
     FuncEntryArguments(DMF_TRACE, "DmfModule=0x%p dmfObject=0x%p [%s]", DmfModule, dmfObject, dmfObject->ClientModuleInstanceName);
 
-    DMF_HandleValidate_IsCreatedOrClosed(dmfObject);
+    DMF_HandleValidate_IsCreatedOrOpenedOrClosed(dmfObject);
 
     FuncExit(DMF_TRACE, "dmfObject=0x%p [%s]", dmfObject, dmfObject->ClientModuleInstanceName);
 }

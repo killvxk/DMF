@@ -5,13 +5,15 @@
 
 Module Name:
 
-    Dmf.c
+    DmfValidate.c
 
 Abstract:
 
-    DMF Implementation.
+    DMF Implementation:
 
-    NOTE: Make sure to set "compile as C++" when this code linked with C++ programs.
+    Contains validation helper functions used in DEBUG build only.
+
+    NOTE: Make sure to set "compile as C++" option.
     NOTE: Make sure to #define DMF_USER_MODE in UMDF Drivers.
 
 Environment:
@@ -531,12 +533,29 @@ Return Value:
 
 VOID
 DMF_HandleValidate_ModuleMethod(
-    _In_ DMFMODULE DmfModule,
-    _In_ DMF_MODULE_DESCRIPTOR* DmfModuleDescriptor
+    _In_ DMFMODULE DmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module and a Module Descriptor, this function verifies that the given Module's
+    descriptor matches the given Module Descriptor. Methods use this function to indicate
+    when a Module's Method is called using another Module's (different type of Module) handle.
+    Doing so is always a fatal error.
+
+Arguments:
+
+    DmfModule - The given Module handle.
+    DmfModuleDescriptor - The given Module Descriptor.
+
+Return Value:
+
+    None. Failure causes an assert to trigger.
+
+--*/
 {
     UNREFERENCED_PARAMETER(DmfModule);
-    UNREFERENCED_PARAMETER(DmfModuleDescriptor);
 
 #if defined(DEBUG)
     DMF_OBJECT* dmfObject;
@@ -549,7 +568,6 @@ DMF_HandleValidate_ModuleMethod(
     {
         DMF_HandleValidate_IsOpened(dmfObject);
     }
-    ASSERT(dmfObject->ModuleName == DmfModuleDescriptor->ModuleName);
 #endif // defined(DEBUG)
 }
 
@@ -557,6 +575,22 @@ VOID
 DMF_ObjectValidate(
     _In_ DMFMODULE DmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module, this function validates various elements of the Module's
+    corresponding data structure.
+
+Arguments:
+
+    DmfModule - The given Module handle.
+
+Return Value:
+
+    None. Failure causes an assert to trigger.
+
+--*/
 {
     UNREFERENCED_PARAMETER(DmfModule);
 
@@ -575,12 +609,26 @@ DMF_ObjectValidate(
 
 VOID
 DMF_HandleValidate_OpeningOk(
-    _In_ DMFMODULE DmfModule,
-    _In_ DMF_MODULE_DESCRIPTOR* DmfModuleDescriptor
+    _In_ DMFMODULE DmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module, this function validates that the Module is either
+    opening or opened.
+
+Arguments:
+
+    DmfModule - The given Module handle.
+
+Return Value:
+
+    None. Failure causes an assert to trigger.
+
+--*/
 {
     UNREFERENCED_PARAMETER(DmfModule);
-    UNREFERENCED_PARAMETER(DmfModuleDescriptor);
 
 #if defined(DEBUG)
     DMF_OBJECT* dmfObject;
@@ -590,18 +638,31 @@ DMF_HandleValidate_OpeningOk(
     ASSERT(DMF_OBJECT_SIGNATURE == dmfObject->Signature);
     ASSERT((ModuleState_Opened == dmfObject->ModuleState) ||
            (ModuleState_Opening == dmfObject->ModuleState));
-    ASSERT(dmfObject->ModuleName == DmfModuleDescriptor->ModuleName);
 #endif // defined(DEBUG)
 }
 
 VOID
 DMF_HandleValidate_ClosingOk(
-    _In_ DMFMODULE DmfModule,
-    _In_ DMF_MODULE_DESCRIPTOR* DmfModuleDescriptor
+    _In_ DMFMODULE DmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module, this function validates that the Module is either
+    opened or closing.
+
+Arguments:
+
+    DmfModule - The given Module handle.
+
+Return Value:
+
+    None. Failure causes an assert to trigger.
+
+--*/
 {
     UNREFERENCED_PARAMETER(DmfModule);
-    UNREFERENCED_PARAMETER(DmfModuleDescriptor);
 
 #if defined(DEBUG)
     DMF_OBJECT* dmfObject;
@@ -610,7 +671,6 @@ DMF_HandleValidate_ClosingOk(
     DMF_ObjectValidate((DMFMODULE)dmfObject->MemoryDmfObject);
     ASSERT((ModuleState_Opened == dmfObject->ModuleState) ||
         (ModuleState_Closing == dmfObject->ModuleState));
-    ASSERT(dmfObject->ModuleName == DmfModuleDescriptor->ModuleName);
 #endif // defined(DEBUG)
 }
 

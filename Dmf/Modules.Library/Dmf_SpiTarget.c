@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -479,7 +480,7 @@ Exit:
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -574,6 +575,7 @@ Return Value:
     {
         ASSERT(NT_SUCCESS(ntStatus));
         WdfObjectDelete(moduleContext->Target);
+        moduleContext->Target = NULL;
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "WdfIoTargetOpen fails: ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
@@ -737,14 +739,6 @@ Exit:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_SpiTarget;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_SpiTarget;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -780,28 +774,28 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_SpiTarget;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_SpiTarget;
 
     PAGED_CODE();
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_SpiTarget);
-    DmfCallbacksDmf_SpiTarget.DeviceOpen = DMF_SpiTarget_Open;
-    DmfCallbacksDmf_SpiTarget.DeviceClose = DMF_SpiTarget_Close;
-    DmfCallbacksDmf_SpiTarget.DeviceResourcesAssign = DMF_SpiTarget_ResourcesAssign;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_SpiTarget);
+    dmfCallbacksDmf_SpiTarget.DeviceOpen = DMF_SpiTarget_Open;
+    dmfCallbacksDmf_SpiTarget.DeviceClose = DMF_SpiTarget_Close;
+    dmfCallbacksDmf_SpiTarget.DeviceResourcesAssign = DMF_SpiTarget_ResourcesAssign;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_SpiTarget,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_SpiTarget,
                                             SpiTarget,
                                             DMF_CONTEXT_SpiTarget,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_D0Entry);
 
-    DmfModuleDescriptor_SpiTarget.CallbacksDmf = &DmfCallbacksDmf_SpiTarget;
-
-    DmfModuleDescriptor_SpiTarget.ModuleConfigSize = sizeof(DMF_CONFIG_SpiTarget);
+    dmfModuleDescriptor_SpiTarget.CallbacksDmf = &dmfCallbacksDmf_SpiTarget;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_SpiTarget,
+                                &dmfModuleDescriptor_SpiTarget,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {

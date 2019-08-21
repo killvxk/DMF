@@ -9,8 +9,14 @@ Module Name:
 
 Abstract:
 
-    DMF Implementation.
+    DMF Implementation:
+
     This Module contains DMF Module create/destroy support.
+
+    NOTE: Make sure to set "compile as C++" option.
+    NOTE: Make sure to #define DMF_USER_MODE in UMDF Drivers.
+    NOTE: Some, but not all DMF Modules are compatible with both User-mode and Kernel-mode.
+          Module authors should "#if defined(DMF_USER_MODE)" in Modules to support both modes.
 
 Environment:
 
@@ -18,33 +24,6 @@ Environment:
     User-mode Driver Framework
 
 --*/
-
-// Compilation Options: START
-// ==========================
-//
-
-// Project File Options:
-// ---------------------
-//
-
-// Use DMF in a User-mode Driver.
-// NOTE: Some, but not all DMF Modules are compatible with both User-mode and Kernel-mode.
-//       Module authors should use this option in Modules to support both modes.
-//
-// DMF_USER_MODE
-
-// Test Options:
-// -------------
-// NOTE: These are not to be used in production code.
-//
-
-#if defined(DEBUG)
-
-// Inject partial successful initialization of Modules in a Module Collection.
-//
-// USE_DMF_INJECT_FAULT_PARTIAL_OPEN
-
-#endif // defined(DEBUG)
 
 #include "DmfIncludeInternal.h"
 
@@ -300,6 +279,8 @@ DmfModuleDescriptor_Generic =
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
+EVT_WDF_OBJECT_CONTEXT_CLEANUP DmfEvtDynamicModuleCleanupCallback;
+
 #pragma code_seg("PAGE")
 _Use_decl_annotations_
 NTSTATUS
@@ -345,6 +326,10 @@ Return Value:
     DMFMODULE dmfModule;
     DMF_MODULE_COLLECTION_CONFIG moduleCollectionConfig;
     DMFCOLLECTION childModuleCollection;
+    BOOLEAN chainClientCleanupCallback;
+    PFN_WDF_OBJECT_CONTEXT_CLEANUP clientEvtCleanupCallback;
+    WDF_OBJECT_ATTRIBUTES copyOfDmfModuleObjectAttributes;
+    WDFOBJECT parentObject;
 
     PAGED_CODE();
 
@@ -365,78 +350,101 @@ Return Value:
     dmfModule = NULL;
     dmfObject = NULL;
     childModuleCollection = NULL;
+    chainClientCleanupCallback = FALSE;
+    clientEvtCleanupCallback = NULL;
 
-    // DmfModuleObjectAttributes should always be set, since ParentObject is a must.
+    // Parent object of the DMFMODULE to create should always be set to one of the following:
     //
-    ASSERT(WDF_NO_OBJECT_ATTRIBUTES != DmfModuleObjectAttributes);
+    //     1. WDFOBJECT (or inherited object)
+    //     2. DMFMODULE (for Child Module)
+    //     3. DMFCOLLECTION (for Module created as part of DMF Collection).
+    //
 
-    // ParentObject should always be set to one of the following
-    // WDFDEVICE (for Dynamic Module) 
-    // DMFMODULE (for Child Module)
-    // DMFCOLLECTION (for Module created as part of DMF Collection).
-    //
-    if (DmfModuleObjectAttributes->ParentObject == NULL)
+    if ((WDF_NO_OBJECT_ATTRIBUTES == DmfModuleObjectAttributes) ||
+        (NULL == DmfModuleObjectAttributes->ParentObject))
     {
-        ASSERT(FALSE);
-        ntStatus = STATUS_INVALID_PARAMETER;
-        goto Exit;
+        // Assign the default parent (Client Driver's WDFDEVICE) if no parent is specified.
+        //
+        parentObject = Device;
+    }
+    else
+    {
+        // Allow Client to specify any parent.
+        // IMPORTANT: ParentObject should be set in a way that Object Clean Up callbacks happen
+        //            in PASSIVE_LEVEL.
+        //
+        parentObject = DmfModuleObjectAttributes->ParentObject;
     }
 
-    // ParentObject must be one of the three types: 
-    // DMFMODULE - The Module that is about to be created will be a Child Module. 
-    // DMFCOLLECTION - Not a Child Module. The Module that is about to be created will be part of a Module Collection.
-    // WDFDEVICE - Not a Child Module. The Module that is about to be created will not be part of any Module Collection. Created by Client directly.
+    // In the case where Client Clean Up callback function is chained, it is necessary
+    // to override the callers data. In order to not modify the copy the caller uses,
+    // copy to local and override it there.
+    // NOTE: Modifying Client's pointer can cause infinite recursion when clean up callbacks
+    //       are called if the Client does not initialize WDF_OBJECT_ATTRIBUTES before
+    //       every call. Copying here prevents that possibility, regardless of what caller does.
     //
+    RtlCopyMemory(&copyOfDmfModuleObjectAttributes,
+                  DmfModuleObjectAttributes,
+                  sizeof(WDF_OBJECT_ATTRIBUTES));
+    DmfModuleObjectAttributes = &copyOfDmfModuleObjectAttributes;
 
     // Check if ParentObject is of type DMFMODULE.
     // If it is, create a ChildModule.
     //
-    childModuleCreate = WdfObjectIsCustomType(DmfModuleObjectAttributes->ParentObject,
+    childModuleCreate = WdfObjectIsCustomType(parentObject,
                                               DMFMODULE_TYPE);
     if (childModuleCreate)
     {
-        dmfModuleParent = (DMFMODULE)DmfModuleObjectAttributes->ParentObject;
+        // Client is creating a Child Module.
+        //
+        dmfModuleParent = (DMFMODULE)parentObject;
         dmfObjectParent = DMF_ModuleToObject(dmfModuleParent);
 
         ASSERT(Device == DMF_ParentDeviceGet(dmfModuleParent));
     }
     else
     {
-        // Not creating a Child Module. 
-        // Ensure Parent is either WDFDEVICE or DMFCOLLECTION.
+        // Client is not creating a Child Module.
         //
-        if ((Device != DmfModuleObjectAttributes->ParentObject) &&
-            (!WdfObjectIsCustomType(DmfModuleObjectAttributes->ParentObject,
-                                    DMFCOLLECTION_TYPE))
-            )
-        {
-            ASSERT(FALSE);
-            ntStatus = STATUS_UNSUCCESSFUL;
-            goto Exit;
-        }
 
-        // Don't create Dynamic Module if the Module supports WDF callbacks since those
-        // callbacks might not happen and the Module will not execute as originally planned.
+        // Use CleanUp callback for Dynamic Modules so that caller can call
+        // WdfObjectDelete() or delete automatically via Parent.
         //
-        if (DmfModuleAttributes->DynamicModule &&
-            NULL != ModuleDescriptor->CallbacksWdf)
+        if (DmfModuleAttributes->DynamicModuleImmediate)
         {
-            ASSERT(FALSE);
-            ntStatus = STATUS_UNSUCCESSFUL;
-            goto Exit;
+            chainClientCleanupCallback = TRUE;
         }
+    }
 
-        // Don't create Dynamic Module if the Module's Open Option depends on WDF callbacks since
-        // those callbacks might not happen and the Module will not execute as originally planned.
-        //
-        if (DmfModuleAttributes->DynamicModule &&
-            (ModuleDescriptor->OpenOption != DMF_MODULE_OPEN_OPTION_OPEN_Create &&
-             ModuleDescriptor->OpenOption != DMF_MODULE_OPEN_OPTION_NOTIFY_Create))
-        {
-            ASSERT(FALSE);
-            ntStatus = STATUS_UNSUCCESSFUL;
-            goto Exit;
-        }
+    // Don't create Dynamic Module if the Module supports WDF callbacks since those
+    // callbacks might not happen and the Module will not execute as originally planned.
+    //
+    if ((DmfModuleAttributes->DynamicModule) &&
+        (NULL != ModuleDescriptor->CallbacksWdf))
+    {
+        ASSERT(FALSE);
+        ntStatus = STATUS_UNSUCCESSFUL;
+        goto Exit;
+    }
+
+    // Don't create Dynamic Module if the Module's Open Option depends on WDF callbacks since
+    // those callbacks might not happen and the Module will not execute as originally planned.
+    //
+    if ((DmfModuleAttributes->DynamicModule) &&
+        (ModuleDescriptor->OpenOption != DMF_MODULE_OPEN_OPTION_OPEN_Create &&
+         ModuleDescriptor->OpenOption != DMF_MODULE_OPEN_OPTION_NOTIFY_Create))
+    {
+        ASSERT(FALSE);
+        ntStatus = STATUS_UNSUCCESSFUL;
+        goto Exit;
+    }
+
+    // Chain the Client's clean up callback.
+    //
+    if (chainClientCleanupCallback)
+    {
+        clientEvtCleanupCallback = DmfModuleObjectAttributes->EvtCleanupCallback;
+        DmfModuleObjectAttributes->EvtCleanupCallback = DmfEvtDynamicModuleCleanupCallback;
     }
 
     ntStatus = WdfMemoryCreate(DmfModuleObjectAttributes,
@@ -453,9 +461,13 @@ Return Value:
         goto Exit;
     }
 
+    RtlZeroMemory(dmfObject,
+                  sizeof(DMF_OBJECT));
+
     if (ModuleDescriptor->ModuleContextAttributes != WDF_NO_OBJECT_ATTRIBUTES)
     {
         // Allocate Module Context.
+        // NOTE: This (ModuleContext) pointer is used only for debugging purposes.
         //
         ntStatus = WdfObjectAllocateContext(memoryDmfObject,
                                             ModuleDescriptor->ModuleContextAttributes,
@@ -467,9 +479,6 @@ Return Value:
         }
     }
 
-    RtlZeroMemory(dmfObject,
-                  sizeof(DMF_OBJECT));
-
     // Begin populating the DMF Object.
     //
     InitializeListHead(&dmfObject->ChildObjectList);
@@ -479,6 +488,12 @@ Return Value:
     dmfObject->ModuleName = ModuleDescriptor->ModuleName;
     dmfObject->IsClosePending = FALSE;
     dmfObject->NeedToCallPreClose = FALSE;
+    dmfObject->ClientEvtCleanupCallback = clientEvtCleanupCallback;
+    dmfObject->IsTransport = DmfModuleAttributes->IsTransportModule;
+
+    RtlCopyMemory(&dmfObject->ModuleAttributes,
+                  DmfModuleAttributes,
+                  sizeof(DMF_MODULE_ATTRIBUTES));
 
     // Create space for the Client Module Instance Name. It needs to be allocated because
     // the name that is passed in may not be statically allocated. A copy needs to be made
@@ -504,6 +519,8 @@ Return Value:
     clientModuleInstanceNameSizeBytes = strlen(clientModuleInstanceName) + sizeof(CHAR);
     ASSERT(clientModuleInstanceNameSizeBytes > 1);
 
+    // Allocate space for the instance name. This name is useful during debugging.
+    //
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.ParentObject = memoryDmfObject;
     ntStatus = WdfMemoryCreate(&attributes,
@@ -533,9 +550,9 @@ Return Value:
     // Create the area for Module Config, if any.
     //
     ASSERT(NULL == dmfObject->ModuleConfig);
-    ASSERT(ModuleDescriptor->ModuleConfigSize == DmfModuleAttributes->SizeOfModuleSpecificConfig);
-    if (ModuleDescriptor->ModuleConfigSize > 0)
+    if (DmfModuleAttributes->SizeOfModuleSpecificConfig != NULL)
     {
+        ASSERT(ModuleDescriptor->ModuleConfigSize == DmfModuleAttributes->SizeOfModuleSpecificConfig);
         WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
         attributes.ParentObject = memoryDmfObject;
         ntStatus = WdfMemoryCreate(&attributes,
@@ -564,11 +581,32 @@ Return Value:
     }
     else
     {
-        // If Module has not defined an Module Config, an Module Config must not be passed in.
-        // Most likely, Module author forgot to set the size of the Module Config in the 
-        // Module Entry Point Table.
+        // NOTE: Because only proper Config initialization macros are exposed, there is no way for the 
+        //       Client to improperly initialize the Config (as it was in the past). It means, that if 
+        //       this path executes, the Module Author has not defined a Config.
         //
-        ASSERT(DmfModuleAttributes->ModuleConfigPointer == NULL);
+    }
+
+    // Create WDFCOLLECTION to store the Interface Bindings of this Module.
+    //
+    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+    attributes.ParentObject = memoryDmfObject;
+    ntStatus = WdfCollectionCreate(&attributes,
+                                   &dmfObject->InterfaceBindings);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "Unable to allocate Collection for InterfaceBindings.");
+        goto Exit;
+    }
+
+    // Create a spin lock to protect access to the Interface Bindings Collection.
+    //
+    ntStatus = WdfSpinLockCreate(&attributes,
+                                 &dmfObject->InterfaceBindingsLock);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "InterfaceBindingsLock create fails.");
+        goto Exit;
     }
 
     // Initialize the callbacks to generic handlers.
@@ -626,9 +664,14 @@ Return Value:
     //
     dmfObject->ModuleDescriptor.ModuleLiveKernelDumpInitialize = ModuleDescriptor->ModuleLiveKernelDumpInitialize;
 
-    // Copy over the Module Transport Method if any.
+    // Copy over the Module Transport Method and GUID.
     //
     dmfObject->ModuleDescriptor.ModuleTransportMethod = ModuleDescriptor->ModuleTransportMethod;
+
+    // Copy the Protocol-Transport GUIDs.
+    //
+    dmfObject->ModuleDescriptor.RequiredTransportInterfaceGuid = ModuleDescriptor->RequiredTransportInterfaceGuid;
+    dmfObject->ModuleDescriptor.SupportedTransportInterfaceGuid = ModuleDescriptor->SupportedTransportInterfaceGuid;
 
     // Overwrite the number of Auxiliary Locks needed.
     //
@@ -637,12 +680,10 @@ Return Value:
     // Create the auxiliary locks based on Module Options.
     //
     ntStatus = DMF_SynchronizationCreate(dmfObject,
-                                         Device,
-                                         &dmfObject->ModuleDescriptor,
                                          DmfModuleAttributes->PassiveLevel);
     if (!NT_SUCCESS(ntStatus))
     {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "Unable to create locks");
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_SynchronizationCreate fails: ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -858,6 +899,9 @@ Return Value:
         //
     }
 
+    dmfObject->ModuleDescriptor.WdfAddCustomType = ModuleDescriptor->WdfAddCustomType;
+    ASSERT(dmfObject->ModuleDescriptor.WdfAddCustomType != NULL);
+
     // Handlers are always set. We don't need to check pointers everywhere.
     //
     ASSERT(dmfObject->Callbacks.EvtModuleOnDeviceNotificationPostOpen != NULL);
@@ -946,37 +990,80 @@ Return Value:
     ASSERT(ModuleState_Invalid == dmfObject->ModuleState);
     dmfObject->ModuleState = ModuleState_Created;
 
-    // Add the Child Module to the list of the Parent Module's children
-    // if its not a Dynamic Module. The lifetime of the Dynamic Module is
-    // managed by the Client. 
-    //
-    if ((childModuleCreate) &&
-        (! DmfModuleAttributes->DynamicModule))
+    if (childModuleCreate)
     {
         ASSERT(dmfObjectParent != NULL);
         ASSERT(dmfModuleParent != NULL);
-        InsertTailList(&dmfObjectParent->ChildObjectList,
-                       &dmfObject->ChildListEntry);
 
-        // Increment the Number of Child Modules.
+        // Add the Child Module to the list of the Parent Module's children
+        // if its not a Dynamic Module. The lifetime of the Dynamic Module is
+        // managed by the Client. 
         //
-        dmfObjectParent->NumberOfChildModules += 1;
+        if (!DmfModuleAttributes->DynamicModuleImmediate)
+        {
+            // NOTE: These values are expected to be NULL because the Parent
+            //       has not initialized the ModuleCollection yet. (It cannot
+            //       because that pointer is not passed to the Instance Creation
+            //       function. Perhaps later we modify the Instance Creation 
+            //       function to accept it. It is not necessary for proper
+            //       functioning of the drivers, however. These asserts are 
+            //       here to ensure that we all know this is "by design".
+            //
+            ASSERT(NULL == dmfObject->ModuleCollection);
+            ASSERT(NULL == dmfObjectParent->ModuleCollection);
+
+            InsertTailList(&dmfObjectParent->ChildObjectList,
+                           &dmfObject->ChildListEntry);
+
+            // Increment the Number of Child Modules.
+            //
+            dmfObjectParent->NumberOfChildModules += 1;
+        }
 
         // Save the Parent in the Child.
         //
         ASSERT(NULL == dmfObject->DmfObjectParent);
         dmfObject->DmfObjectParent = dmfObjectParent;
 
-        // NOTE: These values are expected to be NULL because the Parent
-        //       has not initialized the ModuleCollection yet. (It cannot
-        //       because that pointer is not passed to the Instance Creation
-        //       function. Perhaps later we modify the Instance Creation 
-        //       function to accept it. It is not necessary for proper
-        //       functioning of the drivers, however. These asserts are 
-        //       here to ensure that we all know this is "by design".
+        // Perform operations when this Module is instantiated as a Transport Module.
         //
-        ASSERT(NULL == dmfObject->ModuleCollection);
-        ASSERT(NULL == dmfObjectParent->ModuleCollection);
+        if (dmfObject->IsTransport)
+        {
+            ASSERT(dmfObjectParent->ModuleDescriptor.ModuleOptions & DMF_MODULE_OPTIONS_TRANSPORT_REQUIRED);
+#if DBG
+            GUID zeroGuid;
+
+            RtlZeroMemory(&zeroGuid,
+                          sizeof(zeroGuid));
+            ASSERT(!DMF_Utility_IsEqualGUID(&zeroGuid,
+                                            &dmfObject->ModuleDescriptor.SupportedTransportInterfaceGuid));
+            ASSERT(!DMF_Utility_IsEqualGUID(&zeroGuid,
+                                            &dmfObjectParent->ModuleDescriptor.RequiredTransportInterfaceGuid));
+#endif
+            // The Child's supported interface GUID must match the Parent's desired interface GUID.
+            //
+            if (DMF_Utility_IsEqualGUID(&dmfObject->ModuleDescriptor.SupportedTransportInterfaceGuid,
+                                        &dmfObjectParent->ModuleDescriptor.RequiredTransportInterfaceGuid))
+            {
+                DMFMODULE parentDmfModule = DMF_ObjectToModule(dmfObjectParent);
+                DMFMODULE childDmfModule = DMF_ObjectToModule(dmfObject);
+
+                // Set the Parent's Transport Module to this Child Module.
+                //
+                DMF_ModuleTransportSet(parentDmfModule,
+                                       childDmfModule);
+            }
+            else
+            {
+                // Attempted to connect incompatible transport interface.
+                //
+                ASSERT(FALSE);
+                ntStatus = STATUS_UNSUCCESSFUL;
+                goto Exit;
+            }
+        }
+
+
     }
 
     dmfModule = (DMFMODULE)memoryDmfObject;
@@ -986,23 +1073,6 @@ Return Value:
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "WdfObjectAddCustomType fails: ntStatus=%!STATUS!", ntStatus);
         goto Exit;
-    }
-
-    // Allow the Client to set a Transport if it is required.
-    //
-    if (dmfObject->ModuleDescriptor.ModuleOptions & DMF_MODULE_OPTIONS_TRANSPORT_REQUIRED)
-    {
-        // This Module requires a Transport. Client must have set a Transport creation callback.
-        //
-        ASSERT(DmfModuleAttributes->TransportsCreator != NULL);
-        dmfObject->SetTransportMode = TRUE;
-        ntStatus = DmfModuleAttributes->TransportsCreator(dmfModule);
-        dmfObject->SetTransportMode = FALSE;
-        if (! NT_SUCCESS(ntStatus))
-        {
-            TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "TransportsCreator fails: ntStatus=%!STATUS!", ntStatus);
-            goto Exit;
-        }
     }
 
 #if !defined(DMF_USER_MODE)
@@ -1057,6 +1127,19 @@ Return Value:
     dmfObject->ModuleDescriptor.CallbacksDmf->ChildModulesAdd(dmfModule,
                                                               DmfModuleAttributes,
                                                               (PDMFMODULE_INIT)&moduleCollectionConfig);
+    // Allow the Client to set a Transport if it is required.
+    //
+    if (dmfObject->ModuleDescriptor.ModuleOptions & DMF_MODULE_OPTIONS_TRANSPORT_REQUIRED)
+    {
+        ASSERT(DmfModuleAttributes->TransportModuleAdd != NULL);
+        // Indicate that all Modules added here are Transport Modules.
+        //
+        moduleCollectionConfig.DmfPrivate.IsTransportModule = TRUE;
+        DmfModuleAttributes->TransportModuleAdd(dmfModule,
+                                                DmfModuleAttributes,
+                                                (PDMFMODULE_INIT)&moduleCollectionConfig);
+    }
+
     if (moduleCollectionConfig.DmfPrivate.ListOfConfigs != NULL)
     {
         // 'local variable is initialized but not referenced'
@@ -1103,36 +1186,18 @@ Exit:
         dmfObject = NULL;
     }
 
-    if ((dmfObjectParent != NULL) &&
-        (dmfObjectParent->SetTransportMode))
+    if (dmfObject != NULL)
     {
-        // If this is a Transport Module, connect it to its Parent as a Transport.
-        // Also, do not write the *DmfObject because the Client should not have access
-        // to this handle.
-        //
-        // Suppress: 'dmfModule' could be '0''
-        //
-        #pragma warning(suppress:6387)
-        DMFMODULE parentDmfModule = DMF_ParentModuleGet(dmfModule);
-
-        // Suppress: 'dmfModule' could be '0''
-        //
-        #pragma warning(suppress:6387)
-        DMF_ModuleTransportSet(parentDmfModule, 
-                               dmfModule);
-    }
-    else if (dmfObject != NULL)
-    {
-        ASSERT(! dmfObject->DynamicModule);
+        ASSERT(! dmfObject->DynamicModuleImmediate);
         // If this Module is a Dynamic Module or it is an immediate or non-immediate Child
         // of a Dynamic Module, open it now if it should be opened during Create.
         //
-        if (DmfModuleAttributes->DynamicModule)
+        if (DmfModuleAttributes->DynamicModuleImmediate)
         {
             // Remember it is Dynamic Module so it can be automatically closed prior to destruction.
             // (Client no longer has access to Open/Close API.)
             //
-            dmfObject->DynamicModule = TRUE;
+            dmfObject->DynamicModuleImmediate = TRUE;
             // Since it is a Dynamic Module, Open or register for Notification as specified by the Module's
             // Open Option.
             //
@@ -1145,6 +1210,13 @@ Exit:
         }
         if (DmfModule != NULL)
         {
+            // Add Module name as a custom type for the newly created Module handle.
+            // Data and callbacks are not used as part of the custom type. 
+            //
+            dmfObject->ModuleDescriptor.WdfAddCustomType(dmfModule,
+                                                         0,
+                                                         NULL,
+                                                         NULL);
             // Give Client the resultant Module Handle.
             //
             *DmfModule = dmfModule;
@@ -1160,7 +1232,8 @@ Exit:
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_ModuleDestroy(
-    _In_ DMFMODULE DmfModule
+    _In_ DMFMODULE DmfModule,
+    _In_ BOOLEAN DeleteMemory
     )
 /*++
 
@@ -1183,7 +1256,10 @@ Return Value:
     dmfObject = DMF_ModuleToObject(DmfModule);
 
     FuncEntryArguments(DMF_TRACE, "DmfObject=0x%p [%s]", dmfObject, dmfObject->ClientModuleInstanceName);
-    TraceInformation(DMF_TRACE, "DmfObject=0x%p [%s]", dmfObject, dmfObject->ClientModuleInstanceName);
+
+    // Unbind all Interface Binding of this Module.
+    //
+    DMF_ModuleInterfacesUnbind(DmfModule);
 
     DMF_HandleValidate_Destroy(dmfObject);
     dmfObject->ModuleState = ModuleState_Destroying;
@@ -1192,6 +1268,7 @@ Return Value:
 
     ASSERT(dmfObject->ClientModuleInstanceNameMemory != NULL);
     WdfObjectDelete(dmfObject->ClientModuleInstanceNameMemory);
+    dmfObject->ClientModuleInstanceNameMemory = NULL;
 
 #if !defined(DMF_USER_MODE)
     if (dmfObject->InFlightRecorder != NULL)
@@ -1216,8 +1293,14 @@ Return Value:
         ASSERT(NULL == dmfObject->ModuleConfigMemory);
     }
 
-    WdfObjectDelete(dmfObject->MemoryDmfObject);
-    dmfObject = NULL;
+    if (DeleteMemory)
+    {
+        WdfObjectDelete(dmfObject->MemoryDmfObject);
+        // Memory associated with dmfObject is deleted here.
+        // Thus, dmfObject->MemoryDmfObject is not set to NULL.
+        //
+        dmfObject = NULL;
+    }
 
     FuncExitVoid(DMF_TRACE);
 }
@@ -1227,6 +1310,23 @@ DMF_ModuleTransportSet(
     _In_ DMFMODULE DmfModule,
     _In_ DMFMODULE TransportDmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module, set its Transport Module to the given Transport Module.
+    NOTE: For Legacy Protocol-Transport support only.
+
+Arguments:
+
+    DmfModule - The given Module.
+    TransportDmfModule - The given Transport Module.
+
+Return Value:
+
+    None
+
+--*/
 {
     DMF_OBJECT* dmfObject;
     DMF_OBJECT* dmfObjectTransport;
@@ -1241,6 +1341,21 @@ DMFMODULE
 DMF_ModuleTransportGet(
     _In_ DMFMODULE DmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module, get its Transport Module.
+
+Arguments:
+
+    DmfModule - The given Module.
+
+Return Value:
+
+    The given Module's Transport Module.
+
+--*/
 {
     DMFMODULE transportModule;
     DMF_OBJECT* dmfObject;
@@ -1262,7 +1377,8 @@ DMF_ModuleRequestCompleteOrForward(
 
 Routine Description:
 
-    Completes a given File Create WDFREQUEST:
+    Given a Module, a WDFREQUEST and the NTSTATUS to set in the WDFREQUEST by caller,
+    complete or forward the WDFREQUEST as needed:
     If the caller wants to return STATUS_SUCCESS:
         If the Client Driver is a filter driver, tell DMF to pass the request down the stack.
         If the Client Driver is not a filter drier, then complete the request (by falling through).
@@ -1314,6 +1430,21 @@ RECORDER_LOG
 DMF_InFlightRecorderGet(
     _In_ DMFMODULE DmfModule
     )
+/*++
+
+Routine Description:
+
+    Given a Module, get its WPP In-flight Recorder handle.
+
+Arguments:
+
+    DmfModule - The given Module.
+
+Return Value:
+
+    The given Module's WPP In-flight Recorder handle.
+
+--*/
 {
     DMF_OBJECT* dmfObject = DMF_ModuleToObject(DmfModule);
 

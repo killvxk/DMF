@@ -89,7 +89,7 @@ typedef struct
 
 // This macro declares the following functions:
 // DMF_HidTarget_ATTRIBUTES_INIT()
-// DMF_CONFIG_Hid_AND_ATTRIBUTES_INIT()
+// DMF_CONFIG_HidTarget_AND_ATTRIBUTES_INIT()
 // DMF_HidTarget_Create()
 //
 DECLARE_DMF_MODULE(HidTarget)
@@ -144,8 +144,29 @@ DMF_HidTarget_FeatureSet(
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSTATUS
+DMF_HidTarget_FeatureSetEx(
+    _In_ DMFMODULE DmfModule,
+    _In_ UCHAR FeatureId,
+    _In_ UCHAR* Buffer,
+    _In_ ULONG BufferSize,
+    _In_ ULONG OffsetOfDataToCopy,
+    _In_ ULONG NumberOfBytesToCopy
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSTATUS
 DMF_HidTarget_InputRead(
     _In_ DMFMODULE DmfModule
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSTATUS
+DMF_HidTarget_InputReportGet(
+    _In_ DMFMODULE DmfModule,
+    _In_ WDFMEMORY InputReportMemory,
+    _Out_ ULONG* InputReportLength
     );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

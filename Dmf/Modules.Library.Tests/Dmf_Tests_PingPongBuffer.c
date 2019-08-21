@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.Tests.h"
 #include "DmfModules.Library.Tests.Trace.h"
 
@@ -36,8 +37,9 @@ typedef enum _TEST_ACTION {
     TEST_ACTION_RESET    = 0,
     TEST_ACTION_SHIFT    = 1,
     TEST_ACTION_CONSUME  = 2,
-    TEST_ACTION_MIN      = TEST_ACTION_RESET,
-    TEST_ACTION_MAX      = TEST_ACTION_CONSUME
+    TEST_ACTION_COUNT,
+    TEST_ACTION_MINIUM       = TEST_ACTION_RESET,
+    TEST_ACTION_MAXIMUM      = TEST_ACTION_CONSUME
 } TEST_ACTION;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -286,8 +288,8 @@ Tests_PingPongBuffer_ReadThreadWork(
 
     // Generate a random test action Id for a current iteration.
     //
-    testAction = (TEST_ACTION)TestsUtility_GenerateRandomNumber(TEST_ACTION_MIN,
-                                                                TEST_ACTION_MAX);
+    testAction = (TEST_ACTION)TestsUtility_GenerateRandomNumber(TEST_ACTION_MINIUM,
+                                                                TEST_ACTION_MAXIMUM);
     // Execute the test action.
     //
     switch (testAction)
@@ -388,6 +390,11 @@ Exit:
     TestsUtility_YieldExecution();
 }
 #pragma code_seg()
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+// WDF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // DMF Module Callbacks
@@ -501,13 +508,85 @@ Return Value:
 }
 #pragma code_seg()
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_Tests_PingPongBuffer_ChildModulesAdd(
+    _In_ DMFMODULE DmfModule,
+    _In_ DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+    _In_ PDMFMODULE_INIT DmfModuleInit
+    )
+/*++
 
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Tests_PingPongBuffer;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Tests_PingPongBuffer;
+Routine Description:
+
+    Configure and add the required Child Modules to the given Parent Module.
+
+Arguments:
+
+    DmfModule - The given Parent Module.
+    DmfParentModuleAttributes - Pointer to the parent DMF_MODULE_ATTRIBUTES structure.
+    DmfModuleInit - Opaque structure to be passed to DMF_DmfModuleAdd.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_MODULE_ATTRIBUTES moduleAttributes;
+    DMF_CONTEXT_Tests_PingPongBuffer* moduleContext;
+    DMF_CONFIG_PingPongBuffer moduleConfigPingPongBuffer;
+    DMF_CONFIG_Thread moduleConfigThread;
+
+    UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    // PingPongBuffer
+    // --------------
+    //
+    DMF_CONFIG_PingPongBuffer_AND_ATTRIBUTES_INIT(&moduleConfigPingPongBuffer,
+                                                  &moduleAttributes);
+    moduleConfigPingPongBuffer.BufferSize = PINGPONG_BUFFER_SIZE;
+    moduleConfigPingPongBuffer.PoolType = PagedPool;
+    moduleAttributes.PassiveLevel = TRUE;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                     &moduleAttributes,
+                     WDF_NO_OBJECT_ATTRIBUTES,
+                     &moduleContext->DmfModulePingPongBuffer);
+
+    // Thread
+    // ------
+    //
+    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
+                                            &moduleAttributes);
+    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
+    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_PingPongBuffer_ReadThreadWork;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                        &moduleAttributes,
+                        WDF_NO_OBJECT_ATTRIBUTES,
+                        &moduleContext->DmfModuleReadThread);
+
+    // Thread
+    // ------
+    //
+    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
+                                            &moduleAttributes);
+    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
+    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_PingPongBuffer_WriteThreadWork;
+    DMF_DmfModuleAdd(DmfModuleInit,
+                        &moduleAttributes,
+                        WDF_NO_OBJECT_ATTRIBUTES,
+                        &moduleContext->DmfModuleWriteThread);
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -543,116 +622,34 @@ Return Value:
 
 --*/
 {
-    DMFMODULE dmfModule;
-    DMF_CONTEXT_Tests_PingPongBuffer* moduleContext;
-    DMF_CONFIG_Thread moduleConfigThread;
-    DMF_CONFIG_PingPongBuffer moduleConfigPingPongBuffer;
-    WDF_OBJECT_ATTRIBUTES objectAttributes;
-    DMF_MODULE_ATTRIBUTES moduleAttributes;
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Tests_PingPongBuffer;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Tests_PingPongBuffer;
 
     PAGED_CODE();
 
-    dmfModule = NULL;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Tests_PingPongBuffer);
+    dmfCallbacksDmf_Tests_PingPongBuffer.ChildModulesAdd = DMF_Tests_PingPongBuffer_ChildModulesAdd;
+    dmfCallbacksDmf_Tests_PingPongBuffer.DeviceOpen = Tests_PingPongBuffer_Open;
+    dmfCallbacksDmf_Tests_PingPongBuffer.DeviceClose = Tests_PingPongBuffer_Close;
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Tests_PingPongBuffer);
-    DmfCallbacksDmf_Tests_PingPongBuffer.DeviceOpen = Tests_PingPongBuffer_Open;
-    DmfCallbacksDmf_Tests_PingPongBuffer.DeviceClose = Tests_PingPongBuffer_Close;
-
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Tests_PingPongBuffer,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Tests_PingPongBuffer,
                                             Tests_PingPongBuffer,
                                             DMF_CONTEXT_Tests_PingPongBuffer,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Tests_PingPongBuffer.CallbacksDmf = &DmfCallbacksDmf_Tests_PingPongBuffer;
+    dmfModuleDescriptor_Tests_PingPongBuffer.CallbacksDmf = &dmfCallbacksDmf_Tests_PingPongBuffer;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Tests_PingPongBuffer,
-                                &dmfModule);
+                                &dmfModuleDescriptor_Tests_PingPongBuffer,
+                                DmfModule);
     if (!NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
     }
-
-    moduleContext = DMF_CONTEXT_GET(dmfModule);
-
-    // Create child modules
-    //
-
-    // DmfModule will be set as ParentObject for all child modules.
-    //
-    WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
-    objectAttributes.ParentObject = dmfModule;
-
-    // PingPongBuffer
-    // --------------
-    //
-    DMF_CONFIG_PingPongBuffer_AND_ATTRIBUTES_INIT(&moduleConfigPingPongBuffer,
-                                                  &moduleAttributes);
-    moduleConfigPingPongBuffer.BufferSize = PINGPONG_BUFFER_SIZE;
-    moduleConfigPingPongBuffer.PoolType = PagedPool;
-    moduleAttributes.PassiveLevel = TRUE;
-    ntStatus = DMF_PingPongBuffer_Create(Device,
-                                         &moduleAttributes,
-                                         &objectAttributes,
-                                         &moduleContext->DmfModulePingPongBuffer);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_PingPongBuffer_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // ReadThread
-    // ----------
-    //
-    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
-                                          &moduleAttributes);
-    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
-    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_PingPongBuffer_ReadThreadWork;
-    ntStatus = DMF_Thread_Create(Device,
-                                 &moduleAttributes,
-                                 &objectAttributes,
-                                 &moduleContext->DmfModuleReadThread);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_Thread_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // WriteThread
-    // -----------
-    //
-    DMF_CONFIG_Thread_AND_ATTRIBUTES_INIT(&moduleConfigThread,
-                                          &moduleAttributes);
-    moduleConfigThread.ThreadControlType = ThreadControlType_DmfControl;
-    moduleConfigThread.ThreadControl.DmfControl.EvtThreadWork = Tests_PingPongBuffer_WriteThreadWork;
-    ntStatus = DMF_Thread_Create(Device,
-                                 &moduleAttributes,
-                                 &objectAttributes,
-                                 &moduleContext->DmfModuleWriteThread);
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_Thread_Create fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    
-    *DmfModule = dmfModule;
-
-Exit:
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        if (NULL != dmfModule)
-        {
-            DMF_Module_Destroy(dmfModule);
-            dmfModule = NULL;
-        }
-    }    
 
     return(ntStatus);
 }

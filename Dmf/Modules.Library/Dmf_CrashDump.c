@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -29,12 +30,9 @@ Environment:
 
 #else
 
-#include "..\..\User\General\CSystemTelemetryDevice.h"
-
-#define INITGUID
+#include "CSystemTelemetryDevice.h"
 
 #include <powrprof.h>
-#include <initguid.h>
 
 #endif // !defined(DMF_USER_MODE)
 
@@ -1292,7 +1290,7 @@ Return Value:
     if (dataSource->DmfModuleDataSourceRingBuffer != NULL)
     {
         ASSERT(dataSource->DmfModuleDataSourceRingBuffer != NULL);
-        DMF_Module_Destroy(dataSource->DmfModuleDataSourceRingBuffer);
+        WdfObjectDelete(dataSource->DmfModuleDataSourceRingBuffer);
         dataSource->DmfModuleDataSourceRingBuffer = NULL;
 
         ASSERT((NULL == dataSource->FileObject[DataSourceModeRead]) && 
@@ -2851,7 +2849,7 @@ Return Value:
 #endif // !defined(DMF_USER_MODE)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -2971,8 +2969,7 @@ Return Value:
 {
     PAGED_CODE();
 
-    DMF_ModuleDestroy(DmfModule);
-    DmfModule = NULL;
+    UNREFERENCED_PARAMETER(DmfModule);
 
 #if !defined(DMF_USER_MODE)
     // Clear global instance handle.
@@ -3548,15 +3545,6 @@ Return Value:
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_CrashDump;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_CrashDump;
-static DMF_CALLBACKS_WDF DmfCallbacksWdf_CrashDump;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -3591,6 +3579,9 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_CrashDump;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_CrashDump;
+    DMF_CALLBACKS_WDF dmfCallbacksWdf_CrashDump;
     DMFMODULE dmfModule;
 
     PAGED_CODE();
@@ -3609,34 +3600,33 @@ Return Value:
     }
 #endif // !defined(DMF_USER_MODE)
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_CrashDump);
-    DmfCallbacksDmf_CrashDump.ModuleInstanceDestroy = DMF_CrashDump_Destroy;
-    DmfCallbacksDmf_CrashDump.DeviceOpen = DMF_CrashDump_Open;
-    DmfCallbacksDmf_CrashDump.DeviceClose = DMF_CrashDump_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_CrashDump);
+    dmfCallbacksDmf_CrashDump.ModuleInstanceDestroy = DMF_CrashDump_Destroy;
+    dmfCallbacksDmf_CrashDump.DeviceOpen = DMF_CrashDump_Open;
+    dmfCallbacksDmf_CrashDump.DeviceClose = DMF_CrashDump_Close;
 #if !defined(DMF_USER_MODE)
-    DmfCallbacksDmf_CrashDump.ChildModulesAdd = DMF_CrashDump_ChildModulesAdd;
+    dmfCallbacksDmf_CrashDump.ChildModulesAdd = DMF_CrashDump_ChildModulesAdd;
 #endif // !defined(DMF_USER_MODE)
 
-    DMF_CALLBACKS_WDF_INIT(&DmfCallbacksWdf_CrashDump);
+    DMF_CALLBACKS_WDF_INIT(&dmfCallbacksWdf_CrashDump);
 #if !defined(DMF_USER_MODE)
-    DmfCallbacksWdf_CrashDump.ModuleSurpriseRemoval = DMF_CrashDump_SurpriseRemoval;
-    DmfCallbacksWdf_CrashDump.ModuleFileClose = DMF_CrashDump_FileClose;
+    dmfCallbacksWdf_CrashDump.ModuleSurpriseRemoval = DMF_CrashDump_SurpriseRemoval;
+    dmfCallbacksWdf_CrashDump.ModuleFileClose = DMF_CrashDump_FileClose;
 #endif // !defined(DMF_USER_MODE)
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_CrashDump,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_CrashDump,
                                             CrashDump,
                                             DMF_CONTEXT_CrashDump,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_CrashDump.CallbacksDmf = &DmfCallbacksDmf_CrashDump;
-    DmfModuleDescriptor_CrashDump.CallbacksWdf = &DmfCallbacksWdf_CrashDump;
-    DmfModuleDescriptor_CrashDump.ModuleConfigSize = sizeof(DMF_CONFIG_CrashDump);
+    dmfModuleDescriptor_CrashDump.CallbacksDmf = &dmfCallbacksDmf_CrashDump;
+    dmfModuleDescriptor_CrashDump.CallbacksWdf = &dmfCallbacksWdf_CrashDump;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_CrashDump,
+                                &dmfModuleDescriptor_CrashDump,
                                 &dmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -3690,8 +3680,8 @@ Return Value:
     //
     NTSTATUS ntStatus;
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_CrashDump);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 CrashDump);
 
 #if !defined(DMF_USER_MODE)
     // Write the data from the Data Source to its respective Ring Buffer. If it does not fit, an error 

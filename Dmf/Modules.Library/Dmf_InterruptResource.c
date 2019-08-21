@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -41,14 +42,14 @@ typedef struct
     //
     BOOLEAN InterruptAssigned;
 
-    // SPB Line Index that is instantiated in this object.
+    // Interrupt Line Index that is instantiated in this object.
     //
     ULONG InterruptResourceLineIndex;
-    // SPB Interrupt Index that is instantiated in this object.
+    // Interrupt Index that is instantiated in this object.
     //
     ULONG InterruptResourceInterruptIndex;
 
-    // Resource information for SPB device.
+    // Resource information of the interrupt.
     //
     CM_PARTIAL_RESOURCE_DESCRIPTOR InterruptResourceConnection;
 
@@ -157,7 +158,7 @@ InterruptResource_PasiveLevelCallback(
 /*++
 Routine Description:
 
-    Passive Level callback for a passive level SPB interrupt.
+    Passive Level callback for a passive level interrupt.
 
 Arguments:
 
@@ -208,7 +209,7 @@ InterruptResource_DpcForIsr(
 /*++
 Routine Description:
 
-    DPC callback for a SPB interrupt.
+    DPC callback for a interrupt.
 
 Arguments:
 
@@ -388,7 +389,7 @@ InterruptResource_Isr(
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -479,7 +480,7 @@ Return Value:
         {
             if (moduleConfig->InterruptIndex == interruptIndex)
             {
-                // Store the index of the SPB interrupt that is instantiated.
+                // Store the index of the interrupt that is instantiated.
                 // (For debug purposes only.)
                 //
                 moduleContext->InterruptResourceInterruptIndex = interruptIndex;
@@ -518,8 +519,14 @@ Return Value:
     }
 
     // Initialize the interrupt, if necessary.
+    // If the Client does not register any handlers, do not connect to the interrupt.
+    // This is necessary for the case where the Client just uses a GPIO but does not 
+    // need the interrupt resource that is present.
     //
-    if (moduleContext->InterruptAssigned)
+    if ((moduleContext->InterruptAssigned) &&
+        ((moduleConfig->EvtInterruptResourceInterruptIsr != NULL) ||
+         (moduleConfig->EvtInterruptResourceInterruptPassive != NULL) ||
+         (moduleConfig->EvtInterruptResourceInterruptDpc != NULL)))
     {
         WDF_INTERRUPT_CONFIG_INIT(&interruptConfig,
                                   InterruptResource_Isr,
@@ -561,7 +568,7 @@ Return Value:
             goto Exit;
         }
 
-        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "SPB Interrupt Created");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "Interrupt Created");
 
         // NOTE: It is not possible to get the parent of a WDFINTERRUPT.
         // Therefore, it is necessary to save the DmfModule in its context area.
@@ -686,10 +693,9 @@ Return Value:
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
-    if (moduleContext->Interrupt != nullptr)
-    {
-        WdfObjectDelete(moduleContext->Interrupt);
-    }
+    // Do not delete moduleContext->Interrupt. It is prohibited per
+    // Verifier.
+    //
 
     // Make sure all pending work is complete.
     //
@@ -701,14 +707,6 @@ Return Value:
     FuncExitVoid(DMF_TRACE);
 }
 #pragma code_seg()
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_InterruptResource;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_InterruptResource;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -745,28 +743,28 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_InterruptResource;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_InterruptResource;
 
     PAGED_CODE();
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_InterruptResource);
-    DmfCallbacksDmf_InterruptResource.DeviceResourcesAssign = DMF_InterruptResource_ResourcesAssign;
-    DmfCallbacksDmf_InterruptResource.DeviceOpen = DMF_InterruptResource_Open;
-    DmfCallbacksDmf_InterruptResource.DeviceClose = DMF_InterruptResource_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_InterruptResource);
+    dmfCallbacksDmf_InterruptResource.DeviceResourcesAssign = DMF_InterruptResource_ResourcesAssign;
+    dmfCallbacksDmf_InterruptResource.DeviceOpen = DMF_InterruptResource_Open;
+    dmfCallbacksDmf_InterruptResource.DeviceClose = DMF_InterruptResource_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_InterruptResource,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_InterruptResource,
                                             InterruptResource,
                                             DMF_CONTEXT_InterruptResource,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
 
-    DmfModuleDescriptor_InterruptResource.CallbacksDmf = &DmfCallbacksDmf_InterruptResource;
-
-    DmfModuleDescriptor_InterruptResource.ModuleConfigSize = sizeof(DMF_CONFIG_InterruptResource);
+    dmfModuleDescriptor_InterruptResource.CallbacksDmf = &dmfCallbacksDmf_InterruptResource;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_InterruptResource,
+                                &dmfModuleDescriptor_InterruptResource,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -808,8 +806,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_InterruptResource);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 InterruptResource);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -843,8 +841,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_InterruptResource);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 InterruptResource);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -885,8 +883,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_InterruptResource);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 InterruptResource);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -929,8 +927,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_InterruptResource);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 InterruptResource);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

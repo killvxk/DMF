@@ -201,8 +201,6 @@ Function)](#section-11-public-calls-by-client-includes-module-create-function)
 
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[DMF_DmfModuleAdd 103](#dmf_dmfmoduleadd)
 
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[DMF_ModuleDestroy 106](#dmf_moduledestroy)
-
 [DMF Module API Reference 107](#dmf-module-api-reference)
 
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[Module Enumerations 108](#module-enumerations)
@@ -587,7 +585,7 @@ rarely designed with all the above features that a DMF driver has.
 DMF Container Driver
 --------------------
 
-In this mode, there is no specific Client Driver code other than to
+In this type of driver, there is no specific Client Driver code other than to
 instantiate DMF Modules and potentially handle Module specific
 callbacks. There is no Device Context. The DMF Modules act *like* small
 drivers and perform all their work (driver's "business logic")
@@ -599,7 +597,7 @@ has its own Private Context.*
 DMF Non-Container Driver
 ------------------------
 
-In this mode, the Client Driver has a Device Context. The Client Driver
+In this type of driver, the Client Driver has a Device Context. The Client Driver
 instantiates Modules and uses them to perform work (device driver's
 "business logic"). But there is also unique driver code that is not part
 of any Module. It is a classic WDF driver except that it uses DMF
@@ -608,6 +606,18 @@ Driver has a Device Context*.
 
 (In the above diagrams, the blue boxes contain code that performs the
 work ("business logic") of the Client Driver.)
+
+WDF driver that uses only Dynamic DMF Modules
+---------------------------------------------
+
+In this type of driver, the Client driver only uses Dynamic Modules. Dynamic Modules do not
+support WDF callbacks, so these kinds of Modules can be instantiated at any time. (Static Modules
+must be instantiated in the `DmfModulesAdd` callback during `DeviceAd`d so that they are able to
+receive any WDF callback starting with `EvtDevicePrepareHardware`.) Both Static and Dynamic Modules
+may be instantiated in `DmfModulesAdd`, but only Dynamic Modules can be instantiated after DeviceAdd.
+**Note: In drivers that only use Dynamic Modules, it is not necessary to call the DMF hooking functions or to call
+DMF_ModulesCreate().**
+
 
 Examples of Modules
 -------------------
@@ -681,8 +691,6 @@ document, *DMF Modules Overview*.
 -   DMF_IoctlHandler
 
 -   DMF_Pdo
-
-
 
 Properties of Modules
 ---------------------
@@ -839,6 +847,9 @@ DMF drivers have the following properties:
 Using DMF in an Existing Driver or a Driver that has a DeviceAdd callback
 -------------------------------------------------------------------------
 
+**Note: In drivers that only use Dynamic Modules, it is not necessary to call the DMF hooking functions or to call
+DMF_ModulesCreate().**
+
 Aside from including the appropriate headers and libraries, there are
 four specific steps to using DMF in a driver that has a **DeviceAdd**
 callback (usually so it can have its own Device Context):
@@ -856,6 +867,9 @@ sections explain steps 3 and 4 which are common for all drivers that use
 DMF. They are "Instantiating DMF Modules" and "Using DMF Modules".
 
 ### Hook DMF into the driver.
+
+**Note: In drivers that only use Dynamic Modules, it is not necessary to call the DMF hooking functions or to call
+DMF_ModulesCreate().**
 
 It is necessary to "hook" DMF into the driver so that DMF can perform
 two important tasks:
@@ -987,6 +1001,9 @@ Finally, with regard to filter drivers, note the following:
     handle.
 
 ### Initialize DMF
+
+**Note: In drivers that only use Dynamic Modules, it is not necessary to call the DMF hooking functions or to call
+DMF_ModulesCreate().**
 
 Using the above steps, DMF is hooked into the Client Driver but is not
 yet initialized. The next step is to initialize DMF.
@@ -1123,6 +1140,9 @@ Now the Client Driver is ready to instantiate Modules. See the section
 
 Instantiating DMF Modules
 -------------------------
+
+**Note: In drivers that only use Dynamic Modules, it is not necessary to call the DMF hooking functions or to call
+DMF_ModulesCreate().**
 
 This section is common to all types of DMF drivers. Most DMF drivers
 will instantiate at least one Module. If you have followed the steps
@@ -1295,8 +1315,8 @@ DMF_[ModuleName]_NotificationRegister callback*.
 7.  Call the Module's Methods as needed passing the **DMFMODULE** from
     step 6.
 
-8.  Finally, destroy the DMFMODULE using
-    **DMF_Module_InstanceDestroy()**.
+8.  Finally, destroy the **DMFMODULE** using `WdfObjectDelete()` or let WDF
+    delete it automatically when its parent WDFOBJECT is deleted.
 
 ### Asynchronous Notification Dynamic Instantiation
 
@@ -1335,14 +1355,17 @@ a DMF_[ModuleName]_NotificationRegister callback.*
 8.  Call the Module's Methods as needed passing the **DMFMODULE** from
     step 7.
 
-9.  Finally, destroy the DMFMODULE using
-    **DMF_Module_InstanceDestroy()**.
+9.  Finally, destroy the **DMFMODULE** using `WdfObjectDelete()` or let WDF
+    delete it automatically when its parent WDFOBJECT is deleted.
 
 ### Destroying a Dynamic Module
 
-It is not necessary to immediately close and destroy the Module after
-its Methods are called. But, it is the responsibility of the Client
-Driver to do so before the driver corresponding WDFDEVICE is deleted.
+It is not necessary to immediately destroy a Dynamic Module after it is created and
+its Methods are called. If the Module's parent **WDFOBJECT** is a **WDFDEVICE** or
+some other **WDFOBJECT**, the Module will be automatically destroyed when its
+parent **WDFOBJECT** is destroyed, similar to all other WDF objects. Likewise,
+the Client can call `WdfObjectDelete()` passing the **DMFMODULE** handle of the
+Dynamic Module at any time.
 
 Here is an example of the above sequence showing the **Dmf_AcpiTarget**
 Module dynamically instantiated:
@@ -1396,7 +1419,7 @@ ConfigurationDetermine(
 Exit:
     if (dmfModuleAcpiTarget != NULL)
     {
-        DMF_Module_Destroy(dmfModuleAcpiTarget);
+        WdfObjectDelete(dmfModuleAcpiTarget);
     }
     return ntStatus;
 }
@@ -2525,31 +2548,7 @@ Return Value:
 }
 #pragma code_seg()
 ```
-### Section 10: Module Descriptors
-
-This section contains the Module descriptor buffers. They are global to
-this Module for two reasons:
-
-1.  To reduce stack space usage. This may be important when Modules
-    contain many layers of Child Modules (especially if the sizes of
-    these structures increase later).
-
-2.  So that the descriptor can be used by Methods to validate the formal
-    **DMFMODULE** to verify the appropriate **DMFMODULE** is sent to the
-    Module Methods by the Client.
-
-> Note the naming convention where the Module name is at the end of the name.
-```
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_ResourceHub;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_ResourceHub;
-static DMF_CALLBACKS_WDF DmfCallbacksWdf_ResourceHub;
-```
-### Section 11: Public Calls by Client (Includes Module Create Function)
+### Section 10: Public Calls by Client (Includes Module Create Function)
 
 This section contains all the code that is callable by Clients:
 
@@ -2597,35 +2596,37 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_ResourceHub;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_ResourceHub;
+    DMF_CALLBACKS_WDF dmfCallbacksWdf_ResourceHub;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE_ResourceHub);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_ResourceHub);
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_ResourceHub);
 
-    DmfCallbacksDmf_ResourceHub.DeviceOpen = DMF_ResourceHub_Open;
-    DmfCallbacksDmf_ResourceHub.DeviceClose = DMF_ResourceHub_Close;
-    DmfCallbacksDmf_ResourceHub.ChildModulesAdd = DMF_ResourceHub_ChildModulesAdd;
+    dmfCallbacksDmf_ResourceHub.DeviceOpen = DMF_ResourceHub_Open;
+    dmfCallbacksDmf_ResourceHub.DeviceClose = DMF_ResourceHub_Close;
+    dmfCallbacksDmf_ResourceHub.ChildModulesAdd = DMF_ResourceHub_ChildModulesAdd;
 
-    DMF_CALLBACKS_WDF_INIT(&DmfCallbacksWdf_ResourceHub);
+    DMF_CALLBACKS_WDF_INIT(&dmfCallbacksWdf_ResourceHub);
 
-    DmfCallbacksWdf_ResourceHub.ModuleFileCreate = DMF_ResourceHub_ModuleFileCreate;
+    dmfCallbacksWdf_ResourceHub.ModuleFileCreate = DMF_ResourceHub_ModuleFileCreate;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_ResourceHub,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_ResourceHub,
                                             ResourceHub,
                                             DMF_CONTEXT_ResourceHub,
                                             DMF_MODULE_OPTIONS_DISPATCH,
                                             DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
 
-    DmfModuleDescriptor_ResourceHub.CallbacksDmf = &DmfCallbacksDmf_ResourceHub;
-    DmfModuleDescriptor_ResourceHub.CallbacksWdf = &DmfCallbacksWdf_ResourceHub;
-    DmfModuleDescriptor_ResourceHub.ModuleConfigSize = sizeof(DMF_CONFIG_ResourceHub);
+    dmfModuleDescriptor_ResourceHub.CallbacksDmf = &dmfCallbacksDmf_ResourceHub;
+    dmfModuleDescriptor_ResourceHub.CallbacksWdf = &dmfCallbacksWdf_ResourceHub;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_ResourceHub,
+                                &dmfModuleDescriptor_ResourceHub,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -2808,33 +2809,32 @@ Return Value:
     // Step 1: Define Module's DMF callbacks.
     //
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_ResourceHub);
-    DmfCallbacksDmf_ResourceHub.DeviceOpen = DMF_ResourceHub_Open;
-    DmfCallbacksDmf_ResourceHub.DeviceClose = DMF_ResourceHub_Close;
-    DmfCallbacksDmf_ResourceHub.ChildModulesAdd = DMF_ResourceHub_ChildModulesAdd;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_ResourceHub);
+    dmfCallbacksDmf_ResourceHub.DeviceOpen = DMF_ResourceHub_Open;
+    dmfCallbacksDmf_ResourceHub.DeviceClose = DMF_ResourceHub_Close;
+    dmfCallbacksDmf_ResourceHub.ChildModulesAdd = DMF_ResourceHub_ChildModulesAdd;
 
     // Step 2: Define Module's WDF callbacks.
     //
-    DMF_CALLBACKS_WDF_INIT(&DmfCallbacksWdf_ResourceHub);
-    DmfCallbacksWdf_ResourceHub.ModuleFileCreate = DMF_ResourceHub_ModuleFileCreate;
+    DMF_CALLBACKS_WDF_INIT(&dmfCallbacksWdf_ResourceHub);
+    dmfCallbacksWdf_ResourceHub.ModuleFileCreate = DMF_ResourceHub_ModuleFileCreate;
 
     // Steps 3 and 4: Define Module's Descriptor.
     //
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_ResourceHub,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_ResourceHub,
                                             ResourceHub,
                                             DMF_CONTEXT_ResourceHub,
                                             DMF_MODULE_OPTIONS_DISPATCH,
                                             DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
-    DmfModuleDescriptor_ResourceHub.CallbacksDmf = &DmfCallbacksDmf_ResourceHub;
-    DmfModuleDescriptor_ResourceHub.CallbacksWdf = &DmfCallbacksWdf_ResourceHub;
-    DmfModuleDescriptor_ResourceHub.ModuleConfigSize = sizeof(DMF_CONFIG_ResourceHub);
+    dmfModuleDescriptor_ResourceHub.CallbacksDmf = &dmfCallbacksDmf_ResourceHub;
+    dmfModuleDescriptor_ResourceHub.CallbacksWdf = &dmfCallbacksWdf_ResourceHub;
 
     // Step 5: Tell DMF to create the Module.
     //
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_ResourceHub,
+                                &dmfModuleDescriptor_ResourceHub,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -4006,34 +4006,6 @@ Return Value:
                      NULL);
 }
 ```
-### DMF_ModuleDestroy
-```
-VOID
-DMF_Module_Destroy(
-    _In_ DMFMODULE DmfModule
-    );
-```
-Given an instance of a Module, tells DMF to destroy the Module.
-
-#### Parameters
-  Parameter | Description
-  ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------
-  **DMFMODULE DmfModule** |  The Module's DMF Module handle. Use this handle to retrieve the Module's Private Context and Config. Also, the Client Driver's **WDFDEVICE** is accessible via this parameter.
-  
-#### Returns
-
-None
-
-Remarks
-
--   This function is used by Clients that instantiate Modules that are
-    dynamically created. Otherwise, DMF calls this API automatically as
-    needed.
-
--   This function is used by Modules when they support the
-    DMF_[ModuleName]_Destroy callback. **It is rare that this is the
-    case, however.**
-
 DMF Module API Reference
 ========================
 
@@ -4058,6 +4030,7 @@ it tells DMF when to call the Module's Open and Close callbacks.
   ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   **DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware**  |  Tells DMF that the Module's **Open** callback should be called when the Client Driver receives an **EvtDevicePrepareHardware** callback. The Module's **Close** callback will be called when the Client Driver receives an **EvtDeviceReleaseHardware** callback.
   **DMF_MODULE_OPEN_OPTION_NOTIFY_PrepareHardware** |  Tells DMF that the Module's **NotificationRegister** callback should be called when the Client Driver receives an **EvtDevicePrepareHardware** callback. In this case, the Module will decide when the Open/Close callbacks are called (usually when the underlying interface has appeared/disappeared). The Module's **NotificationUnregister** callback will be called when the Client Driver receives an **EvtDeviceReleaseHardware** callback.
+  **DMF_MODULE_OPEN_OPTION_OPEN_D0EntrySystemPowerUp** |  Tells DMF that the Module's **Open** callback should be called when the Client Driver receives an **EvtDeviceD0Entry** callback while the system is transitioning from Sx to S0 power state. The Module's **Close** callback will be called when the Client Driver receives an **EvtDeviceD0Exit** callback while the system is transitioning from S0 to Sx power state.
   **DMF_MODULE_OPEN_OPTION_OPEN_D0Entry**          |  Tells DMF that the Module's **Open** callback should be called when the Client Driver receives an **EvtDeviceD0Entry** callback. The Module's **Close** callback will be called when the Client Driver receives an **EvtDeviceD0Exit** callback.
   **DMF_MODULE_OPEN_OPTION_NOTIFY_D0Entry**        |  Tells DMF that the Module's notification register callback should be called when the Client Driver receives an **EvtDeviceD0Entry** callback. In this case, the Module will decide when the Open/Close callbacks are called (usually when the underlying interface has appeared/disappeared). The Module's **NotificationUnregister** callback will be called when the Client Driver receives an **EvtDeviceD0Exit** callback.
   **DMF_MODULE_OPEN_OPTION_OPEN_Create**           |  Tells DMF that the Module should be opened/closed when the Module is created/destroyed. This is common for Modules that do not interact with hardware and, instead, expose support for data structures that just require memory resources. DMF will call the Module's **Open** callback soon after the Module is created. DMF will call the Module's **Close** callback right before the Module is destroyed.
@@ -5879,12 +5852,7 @@ None
 
 #### Remarks
 
--   Module authors should avoid supporting this callback because Module
-    Create functions should not allocate resources that DMF Framework
-    does not know about.
-
--   **If a Module supports this callback, the callback must call
-    DMF_ModuleDestroy()**.
+-   Modules generally do not need to support this callback unless the Module allocates resources in its Create callback (which is discouraged).
 
 -   After this callback returns, the Module nor the Module's Methods may
     be used because the Module's data structures will have been
@@ -5937,12 +5905,14 @@ function failed.
     but not its own as that will cause infinite recursion.)
 
 -   This function is also called by Clients to create a Dynamic Module.
-    See the section *Dynamic Modules* for more information.
+    See the section *Dynamic Modules* for more information. **Modules that are dynamically
+    allocated are freed either by using `WdfObjectDelete()` or by allowing WDF to automatically
+    free the Module when its parent object is deleted.**
 
 -   Every Module must implement this function.
 
--   This function should only initialize and create the Module and its
-    Child Modules. It should not allocate resources or talk to hardware.
+-   This function should only initialize and create the Module. Generally, it should not allocate
+    resources or talk to hardware.
 
 ### DECLARE_DMF_MODULE
 ```
@@ -6421,37 +6391,31 @@ None
     **DMF_ModuleNotificationClose()** is used by the Module from the
     Module's notification callback.
 
-### DMF_ModuleDestroy
+
+### DMF_ModuleIsDynamic
 ```
 VOID
-DMF_ModuleDestroy(
+DMF_ModuleIsDynamic(
     _In_ DMFMODULE DmfModule
     )
 ```
-This function destroys a Module. It is the opposite of
-**DMF_ModuleCreate**. Child Module's are automatically recursively
-destroyed.
+This function allows the caller to determine if the given Module has been instantiated as a Dynamic Module.
 
 #### Parameters
 
   Parameter | Description
   ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------
-  **DMFMODULE DmfModule**  | The Module's DMF Module handle. Use this handle to retrieve the Module's Private Context and Config.
+  **DMFMODULE DmfModule** |  The handle of the given Module.
 
 #### Returns
 
-None
+TRUE indicates the given Module has been instantiated as a Dynamic Module.
+
+FALSE indicates the given Module has not been instantiated as a Dynamic Module.
 
 #### Remarks
 
--   Generally speaking, Modules do not need to call this function
-    because DMF's default Destroy handler calls this function.
-
--   This function, if it is used, should only be called from the
-    Module's Destroy callback.
-
--   After this function is called, the Module's Private Context and
-    Config are destroyed and inaccessible.
+-  Dynamic Modules cannot use WDF callbacks. So, Modules that can be instantiated as Dynamic use this function to determine if WDF callbacks should be set.
 
 ### DMF_ModuleIsInFilterDriver
 ```
@@ -6489,6 +6453,31 @@ FALSE indicates the Module is not executing in a filter driver.
 
 -   DMF knows the Client driver is a filter driver because such drivers
     must call **DMF_DmfFdoSetFilter()**.
+
+### DMF_ModuleIsPassivelevel
+```
+VOID
+DMF_ModuleIsPassiveLevel(
+    _In_ DMFMODULE DmfModule
+    )
+```
+This function allows the caller to determine if the given Module has been instantiated with the `PassiveLevel = TRUE` setting.
+
+#### Parameters
+
+  Parameter | Description
+  ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------
+  **DMFMODULE DmfModule** |  The handle of the given Module.
+
+#### Returns
+
+TRUE indicates the given Module has been instantiated with `PassiveLevel = TRUE`.
+
+FALSE indicates the given Module has been instantiated with `PassiveLevel = FALSE`.
+
+#### Remarks
+
+-   In some cases, a Module will execute different paths depending on its `PassiveLevel` setting.
 
 ### DMF_ModuleRequestCompleteOrForward
 ```
@@ -7209,7 +7198,7 @@ a variable number of parameters.
   **PCWSTR Text**                  | Additional data to add to be included in the error log.
   **INT NumberOfFormatStrings**    | Number of format strings.
   **PWCHAR\* FormatStrings**        | An array of format specifiers for each argument passed below.
-  **INT NumberOfInsertionStrings** | Number of insertion strings.
+  **INT NumberOfInsertionStrings** | The number of insertion string args that follow.
   **...**                          | Variable list of insertion strings.
 
 #### Returns
@@ -7220,6 +7209,12 @@ None.
 
 -   This call is designed to be used from the Client Driver's DeviceAdd
     function (before DMF is initialized).
+
+-   The FormatStrings may contain 'format specifier' values (e.g. %d, %x).
+    In that case, NumberOfInsertionStrings should equal the total number
+    of format specifiers and the variable list should contain an equal 
+    number of values that will be inserted into those FormatStrings in
+    place of the format specifiers.
 
 -   This function performs non-trivial parsing and manipulation of the
     given parameters to output a proper entry in the Event Log.
@@ -7544,7 +7539,6 @@ Client Driver and create instances of Modules.
   **[DMF_DmfDeviceInitSetEventCallbacks]**             |  Client Driver makes this call to set **EvtDmfDeviceModulesAdd** callback prior to calling **DMF_ModulesCreate**. **DMF_DEFAULT_DEVICEADD** calls this function.
   **[DMF_ModulesCreate]**                              |  The last call made after the above calls. DMF will configure and create Modules specified and connect DMF to the Client Driver. After this call the instantiated Modules are ready for use.
   **DMF_ModuleCreate**                                 |  Client Drivers use this call to create Dynamic Modules. *Client drivers typically do not create Dynamic Modules.*
-  **DMF_ModuleDestroy**                                |  Client Drivers use this call to destroy Dynamic Modules (created by **DMF_ModuleCreate**).
   **DMF_ParentDeviceGet**                              |  Client Drivers use this function to retrieve the **WDFDEVICE** that is set as parent of a Module. Using that device, the Client Driver can access the corresponding Device Context.
   **DMF_FilterDeviceGet**                              |  Client Filter Drivers use this function to retrieve the **WDFDEVICE** that corresponds to the Filter Device Filter Device Object.
 
@@ -7565,7 +7559,6 @@ Modules.
   **DMF_CONFIG_GET**                            |  Modules use this function to retrieve the Module's Config information set by the Client.
   **DMF_CONTEXT_GET**                           |  Modules use this function to retrieve the Module's Context. (This context is similar to a Client Driver's device context.)
   **[DMF_ModuleCreate]**                        |  Modules use this call to tell DMF to create an instance of themselves. Modules can also use this call to create instances of Dynamic Modules of other Modules.
-  **DMF_ModuleDestroy**                         |  Modules use this call to tell DMF to destroy an instance of themselves **only** if they support the **DMF_[ModuleName]_Destroy callback**. *Typically, Modules do not support this callback as DMF makes that call on behalf of the Module.* Modules use this call to tell DMF to destroy an instance of a Dynamic Module, however.
   **DMF_ModuleOpen**                            |  Modules that manually control when they open/close use this call to open.
   **DMF_ModuleClose**                           |  Modules that manually control when they open/close use this call to close.
   **DMF_ModuleAcquire**                         |  Modules that manually control when they open/close use this call at the **beginning** of their Methods to ensure that the Module's context is valid during the Method's execution. Using this call ensures that the Module remains open for the duration of the Method's execution.

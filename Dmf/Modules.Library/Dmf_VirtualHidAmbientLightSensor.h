@@ -46,7 +46,8 @@ typedef struct
     UCHAR ReportingState;
     UCHAR PowerState;
     UCHAR SensorState;
-    USHORT ChangeSensitivity;
+    USHORT ChangeSensitivityRelativePercentage;
+    USHORT ChangeSensitivityAbsolute;
     ULONG ReportInterval;
     UCHAR MinimumReportInterval;
     SHORT AlrResponseCurve[VirtualHidAmbientLightSensor_MAXIMUM_NUMBER_OF_ALR_CURVE_RECORDS][2];
@@ -81,13 +82,13 @@ EVT_VirtualHidAmbientLightSensor_FeatureReportDataSet(_In_ DMFMODULE DmfModule,
 //
 typedef struct
 {
-    // Vendor Id of the virtual keyboard.
+    // Vendor Id of the virtual light sensor.
     //
     USHORT VendorId;
-    // Product Id of the virtual keyboard.
+    // Product Id of the virtual light sensor.
     //
     USHORT ProductId;
-    // Version number of the virtual keyboard.
+    // Version number of the virtual light sensor.
     //
     USHORT VersionNumber;
     // Callbacks to get data from ALS hardware.

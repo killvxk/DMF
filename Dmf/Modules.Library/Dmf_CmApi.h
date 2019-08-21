@@ -30,6 +30,17 @@ EVT_DMF_CmApi_DeviceInterfaceList(_In_ DMFMODULE DmfModule,
                                   _In_ WCHAR* DeviceInterfaceList,
                                   _In_ GUID DeviceInterfaceGuid);
 
+typedef
+_Function_class_(EVT_DMF_CmApi_ParentTargetSymbolicLinkName)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+BOOLEAN 
+EVT_DMF_CmApi_ParentTargetSymbolicLinkName(_In_ DMFMODULE DmfModule,
+                                           _In_ ULONG InterfaceIndex,
+                                           _In_ WCHAR* InterfaceName,
+                                           _In_ UNICODE_STRING* SymbolicLinkName,
+                                           _In_ VOID* ClientContext);
+
 // Client uses this structure to configure the Module specific parameters.
 //
 typedef struct
@@ -71,6 +82,49 @@ DMF_CmApi_DeviceInstanceIdAndHardwareIdsGet(
     _Out_ WCHAR* DeviceHardwareIds,
     _In_ UINT32 DeviceHardwareIdsSize
     );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_ParentDevNodeGet(
+    _In_ DMFMODULE DmfModule,
+    _Out_ DEVINST* ParentDevNode,
+    _Out_ WCHAR* ParentDeviceInstanceId,
+    _In_ ULONG ParentDeviceInstanceIdBufferSize
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_CmApi_ParentTargetCloseAndDestroy(
+    _In_ DMFMODULE DmfModule,
+    _In_ WDFIOTARGET ParentWdfIoTarget
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_ParentTargetCreateAndOpen(
+    _In_ DMFMODULE DmfModule,
+    _In_ GUID* GuidDevicePropertyInterface,
+    _Out_ WDFIOTARGET* ParentWdfIoTarget
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_ParentTargetInterfacesEnumerate(
+    _In_ DMFMODULE DmfModule,
+    _In_ EVT_DMF_CmApi_ParentTargetSymbolicLinkName ParentTargetCallback,
+    _In_ GUID* GuidDevicePropertyInterface,
+    _Inout_ VOID* ClientContext
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_CmApi_PropertyUint32Get(
+    _In_ DMFMODULE DmfModule,
+    _In_ GUID* PropertyInterfaceGuid,
+    _In_ PDEVPROPKEY PropertyKey,
+    _Out_ UINT32* Value
+    );
+
 
 #endif // defined(DMF_USER_MODE)
 

@@ -21,6 +21,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Core.h"
 #include "DmfModules.Core.Trace.h"
 
@@ -66,7 +67,7 @@ DMF_MODULE_DECLARE_CONFIG(BufferQueue)
 //
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -146,14 +147,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_BufferQueue;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_BufferQueue;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -176,7 +169,7 @@ Routine Description:
 
 Arguments:
 
-    Device - Client driver's WDFDEVICE object.
+    Device - Client Driver's WDFDEVICE object.
     DmfModuleAttributes - Opaque structure that contains parameters DMF needs to initialize the Module.
     ObjectAttributes - WDF object attributes for DMFMODULE.
     DmfModule - Address of the location where the created DMFMODULE handle is returned.
@@ -188,27 +181,28 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_BufferQueue;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_BufferQueue;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_BufferQueue);
-    DmfCallbacksDmf_BufferQueue.ChildModulesAdd = DMF_BufferQueue_ChildModulesAdd;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_BufferQueue);
+    dmfCallbacksDmf_BufferQueue.ChildModulesAdd = DMF_BufferQueue_ChildModulesAdd;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_BufferQueue,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_BufferQueue,
                                             BufferQueue,
                                             DMF_CONTEXT_BufferQueue,
                                             DMF_MODULE_OPTIONS_DISPATCH_MAXIMUM,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_BufferQueue.CallbacksDmf = &DmfCallbacksDmf_BufferQueue;
-    DmfModuleDescriptor_BufferQueue.ModuleConfigSize = sizeof(DMF_CONFIG_BufferQueue);
+    dmfModuleDescriptor_BufferQueue.CallbacksDmf = &dmfCallbacksDmf_BufferQueue;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_BufferQueue,
+                                &dmfModuleDescriptor_BufferQueue,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -250,8 +244,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -268,7 +262,7 @@ NTSTATUS
 DMF_BufferQueue_Dequeue(
     _In_ DMFMODULE DmfModule,
     _Out_ VOID** ClientBuffer,
-    _Out_ VOID** ClientBufferContext
+    _Out_opt_ VOID** ClientBufferContext
     )
 /*++
 
@@ -295,8 +289,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -344,8 +338,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -387,8 +381,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -431,8 +425,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -451,7 +445,7 @@ NTSTATUS
 DMF_BufferQueue_Fetch(
     _In_ DMFMODULE DmfModule,
     _Out_ VOID** ClientBuffer,
-    _Out_ VOID** ClientBufferContext
+    _Out_opt_ VOID** ClientBufferContext
     )
 /*++
 
@@ -478,8 +472,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -520,8 +514,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -569,8 +563,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_BufferQueue);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 BufferQueue);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

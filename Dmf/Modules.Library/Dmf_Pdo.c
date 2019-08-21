@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -63,6 +64,96 @@ typedef struct _PDO_DEVICE_DATA
 } PDO_DEVICE_DATA;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(PDO_DEVICE_DATA, PdoGetData)
+
+#pragma code_seg("PAGE")
+_Check_return_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+Pdo_DevicePropertyTableWrite(
+    _In_ DMFMODULE DmfModule,
+    _In_ Pdo_DeviceProperty_Table* DevicePropertyTable
+    )
+/*++
+
+Routine Description:
+
+    This routine writes a given table of device properties to the devices's 
+    proptery store.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    DevicePropertyTable - The given table.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    WDFDEVICE device;
+    Pdo_DevicePropertyEntry* entry;
+    UNREFERENCED_PARAMETER(DmfModule);
+
+    ASSERT(DevicePropertyTable);
+
+    FuncEntry(DMF_TRACE);
+
+    PAGED_CODE();
+
+    // Assign the properties for this device.
+    //
+    ntStatus = STATUS_SUCCESS;
+    device = DMF_ParentDeviceGet(DmfModule);
+    for (ULONG propertyIndex = 0; propertyIndex < DevicePropertyTable->ItemCount; propertyIndex++)
+    {
+        entry = &DevicePropertyTable->TableEntries[propertyIndex];
+
+        // First register the device interface GUID if requested.
+        //
+        if (entry->RegisterDeviceInterface)
+        {
+            // Complain if the client requested us to register the device interface,
+            // but did not provide a device interface GUID.
+            //
+            ASSERT(entry->DeviceInterfaceGuid != NULL);
+            if (NULL == entry->DeviceInterfaceGuid)
+            {
+                ntStatus = STATUS_INVALID_PARAMETER;
+                goto Exit;
+            }
+
+            ntStatus = WdfDeviceCreateDeviceInterface(device, 
+                                                      entry->DeviceInterfaceGuid,
+                                                      NULL);
+            if (!NT_SUCCESS(ntStatus))
+            {
+                TraceEvents(TRACE_LEVEL_WARNING, DMF_TRACE, "WdfDeviceCreateDeviceInterface fails: ntStatus=%!STATUS!", ntStatus);
+                goto Exit;
+            }
+        }
+
+        // Now set the properties.
+        //
+        ntStatus = WdfDeviceAssignProperty(device,
+                                           &entry->DevicePropertyData,
+                                           entry->ValueType,
+                                           entry->ValueSize,
+                                           entry->ValueData);
+        if (!NT_SUCCESS(ntStatus))
+        {
+            goto Exit;
+        }
+    }
+
+Exit:
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+#pragma code_seg()
 
 #pragma code_seg("PAGE")
 _Check_return_
@@ -365,8 +456,22 @@ Return Value:
     if (! NT_SUCCESS(ntStatus))
     {
         child = NULL;
-        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "WdfDeviceCreate failed %!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "WdfDeviceCreate fails: ntStatus=%!STATUS!", ntStatus);
         goto Exit;
+    }
+
+    // If the product has specified optional product specific properties, add them here.
+    // This allows different products to specify what is supported on their platform.
+    //
+    if (PdoRecord->DeviceProperties != NULL)
+    {
+        ntStatus = Pdo_DevicePropertyTableWrite(DmfModule, 
+                                                PdoRecord->DeviceProperties);
+        if (!NT_SUCCESS(ntStatus))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "Pdo_DevicePropertyTableWrite fails: ntStatus=%!STATUS!", ntStatus);
+            goto Exit;
+        }
     }
 
     if (PdoRecord->EnableDmf)
@@ -591,9 +696,8 @@ Exit:
 }
 #pragma code_seg()
 
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -662,14 +766,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Pdo;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Pdo;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -704,24 +800,25 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Pdo;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Pdo;
 
     PAGED_CODE();
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Pdo);
-    DmfCallbacksDmf_Pdo.ChildModulesAdd = DMF_Pdo_ChildModulesAdd;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Pdo);
+    dmfCallbacksDmf_Pdo.ChildModulesAdd = DMF_Pdo_ChildModulesAdd;
 
-    DMF_MODULE_DESCRIPTOR_INIT(DmfModuleDescriptor_Pdo,
+    DMF_MODULE_DESCRIPTOR_INIT(dmfModuleDescriptor_Pdo,
                                Pdo,
                                DMF_MODULE_OPTIONS_PASSIVE,
                                DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Pdo.CallbacksDmf = &DmfCallbacksDmf_Pdo;
-    DmfModuleDescriptor_Pdo.ModuleConfigSize = sizeof(DMF_CONFIG_Pdo);
+    dmfModuleDescriptor_Pdo.CallbacksDmf = &dmfCallbacksDmf_Pdo;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Pdo,
+                                &dmfModuleDescriptor_Pdo,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -765,8 +862,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Pdo);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Pdo);
 
     device = DMF_ParentDeviceGet(DmfModule);
 
@@ -779,7 +876,6 @@ Return Value:
 
     return ntStatus;
 }
-
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
@@ -814,8 +910,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Pdo);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Pdo);
 
     device = DMF_ParentDeviceGet(DmfModule);
 
@@ -889,15 +985,14 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Pdo);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Pdo);
 
     device = DMF_ParentDeviceGet(DmfModule);
 
     unique = TRUE;
     childDevice = NULL;
     ntStatus = STATUS_SUCCESS;
-
 
     WdfFdoLockStaticChildListForIteration(device);
 
@@ -961,6 +1056,92 @@ Return Value:
                              Device);
     }
 
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSTATUS
+DMF_Pdo_DevicePlugEx(
+    _In_ DMFMODULE DmfModule,
+    _In_ PDO_RECORD* PdoRecord,
+    _Out_opt_ WDFDEVICE* Device
+    )
+/*++
+
+Routine Description:
+
+    Create and attach a static PDO to the Client Driver's FDO. This Method allows Client
+    to create PDO that uses DMF Modules.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    PdoRecord - The parameters used to create the PDO.
+    Device - The newly created PDO (optional).
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    WDFDEVICE device;
+    WDFDEVICE childDevice;
+    PDO_DEVICE_DATA* pdoData;
+    BOOLEAN unique;
+
+    FuncEntry(DMF_TRACE);
+
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Pdo);
+
+    device = DMF_ParentDeviceGet(DmfModule);
+
+    unique = TRUE;
+    childDevice = NULL;
+    ntStatus = STATUS_SUCCESS;
+
+    WdfFdoLockStaticChildListForIteration(device);
+
+    while ((childDevice = WdfFdoRetrieveNextStaticChild(device,
+                                                        childDevice,
+                                                        WdfRetrieveAddedChildren)) != NULL)
+    {
+        // WdfFdoRetrieveNextStaticChild returns reported and to be reported
+        // children (ie children who have been added but not yet reported to PNP).
+        //
+        // A surprise removed child will not be returned in this list.
+        //
+        pdoData = PdoGetData(childDevice);
+
+        // It's okay to plug in another device with the same serial number
+        // as long as the previous one is in a surprise-removed state. The
+        // previous one would be in that state after the device has been
+        // physically removed, if somebody has an handle open to it.
+        //
+        if (PdoRecord->SerialNumber == pdoData->SerialNumber)
+        {
+            unique = FALSE;
+            ntStatus = STATUS_INVALID_PARAMETER;
+            break;
+        }
+    }
+
+    WdfFdoUnlockStaticChildListFromIteration(device);
+
+    if (unique)
+    {
+        // Create a new child device.
+        //
+        ntStatus = Pdo_PdoEx(DmfModule,
+                             PdoRecord,
+                             NULL,
+                             Device);
+    }
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
 
@@ -997,8 +1178,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Pdo);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Pdo);
 
     device = DMF_ParentDeviceGet(DmfModule);
 
@@ -1053,8 +1234,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Pdo);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Pdo);
 
     device = DMF_ParentDeviceGet(DmfModule);
 

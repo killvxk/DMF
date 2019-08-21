@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -517,10 +518,11 @@ Return Value:
                 }
                 else
                 {
-                    // Likely a poorly formatted registry path. It could be that the hive is misspelled or that
-                    // the path does not start with \Registry\Machine.
+                    // A poorly formatted registry path, or
+                    // a misspelled hive, or
+                    // the path does not start with \Registry\Machine, or
+                    // registry at the specified path is not ready yet.
                     //
-                    ASSERT(FALSE);
                     ntStatus = STATUS_OBJECT_NAME_NOT_FOUND;
                 }
             }
@@ -664,7 +666,6 @@ Return Value:
         ntStatus = Registry_RecursivePathCreate(fullPathName);
         if (! NT_SUCCESS(ntStatus))
         {
-            ASSERT(FALSE);
             TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "Unable to create RegistryPath=%S ntStatus=%!STATUS!", fullPathName, ntStatus);
             goto Exit;
         }
@@ -783,11 +784,11 @@ Routine Description:
 
 Arguments:
 
-    Name - path name of the key relative to handle
+    Name - Path name of the key relative to handle.
 
 Return Value:
 
-    Handle - handle to open registry key or NULL for error.
+    Handle - Handle to open registry key or NULL in case of error.
 
 --*/
 {
@@ -830,8 +831,9 @@ Exit:
 }
 
 NTSTATUS
-Registry_HandleOpenByDevice(
+Registry_HandleOpenByPredefinedKey(
     _In_ WDFDEVICE Device,
+    _In_ ULONG PredefinedKeyId,
     _In_ ULONG AccessMask,
     _Out_ HANDLE* RegistryHandle
     )
@@ -844,8 +846,8 @@ Routine Description:
 Arguments:
 
     Device - Handle to Device object.
-    AccessMask - The access mask to pass
-    RegistryHandle - Handle to open registry key or NULL for error.
+    AccessMask - The access mask to pass.
+    RegistryHandle - Handle to open registry key or NULL in case of error.
 
 Return Value:
 
@@ -865,7 +867,7 @@ Return Value:
     // Open the device registry key of the instance of the device.
     //
     ntStatus = IoOpenDeviceRegistryKey(deviceObject,
-                                       PLUGPLAY_REGKEY_DEVICE,
+                                       PredefinedKeyId,
                                        AccessMask,
                                        RegistryHandle);
     if (! NT_SUCCESS(ntStatus))
@@ -896,10 +898,10 @@ Routine Description:
 
 Arguments:
 
-    Name - path name of the key relative to handle
-    AccessMask - The access mask to pass
+    Name - Path name of the key relative to handle.
+    AccessMask - The access mask to pass.
     Create - Creates the key if it cannot be opened.
-    RegistryHandle - Handle to open registry key or NULL for error.
+    RegistryHandle - Handle to open registry key or NULL in case of error.
 
 Return Value:
 
@@ -977,13 +979,13 @@ Routine Description:
 
 Arguments:
 
-    Handle - handle to open registry key.
-    Name - path name of the key relative to handle
-    TryToCreate - indicates if the function should call create instead of open
+    Handle - Handle to open registry key.
+    Name - Path name of the key relative to handle.
+    TryToCreate - Indicates if the function should call create instead of open.
 
 Return Value:
 
-    Handle - handle to open registry key or NULL for error.
+    Handle - Handle to open registry key or NULL in case of error.
 
 --*/
 {
@@ -1932,7 +1934,7 @@ Return:
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -2101,14 +2103,6 @@ SkipListIteration:
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Registry;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Registry;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -2142,27 +2136,29 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Registry;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Registry;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Registry);
-    DmfCallbacksDmf_Registry.DeviceOpen = DMF_Registry_Open;
-    DmfCallbacksDmf_Registry.DeviceClose = DMF_Registry_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Registry);
+    dmfCallbacksDmf_Registry.DeviceOpen = DMF_Registry_Open;
+    dmfCallbacksDmf_Registry.DeviceClose = DMF_Registry_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Registry,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Registry,
                                             Registry,
                                             DMF_CONTEXT_Registry,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Registry.CallbacksDmf = &DmfCallbacksDmf_Registry;
+    dmfModuleDescriptor_Registry.CallbacksDmf = &dmfCallbacksDmf_Registry;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Registry,
+                                &dmfModuleDescriptor_Registry,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -2211,8 +2207,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
    // There is nothing to pass in this context. (All subkeys are presented to enumerator callback.)
    //
@@ -2283,26 +2279,6 @@ Return Value:
     }
     ASSERT(NULL != dmfModuleRegistry);
 
-    // Make sure the registry is ready before trying anything else.
-    //
-    ntStatus = RtlCheckRegistryKey(RTL_REGISTRY_ABSOLUTE,
-                                   L"\\Registry\\Machine\\System");
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_WARNING, DMF_TRACE, "HKLM\\System is not ready yet: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
-    // Make sure the registry is ready before trying anything else.
-    //
-    ntStatus = RtlCheckRegistryKey(RTL_REGISTRY_ABSOLUTE,
-                                   L"\\Registry\\Machine\\SOFTWARE");
-    if (!NT_SUCCESS(ntStatus))
-    {
-        TraceEvents(TRACE_LEVEL_WARNING, DMF_TRACE, "HKLM\\Software is not ready yet: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
-    }
-
     // Do the work using the Module instance.
     //
     ntStatus = CallbackWork(dmfModuleRegistry);
@@ -2313,7 +2289,7 @@ Exit:
     //
     if (dmfModuleRegistry != NULL)
     {
-        DMF_Module_Destroy(dmfModuleRegistry);
+        WdfObjectDelete(dmfModuleRegistry);
     }
 
     FuncExit(DMF_TRACE, "returnValue=%d", ntStatus);
@@ -2360,8 +2336,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
    // Value type is not needed for Delete.
    // ValueDataToCompare is optional...it will be passed to comparison function.
@@ -2419,8 +2395,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     returnValue = FALSE;
 
@@ -2473,8 +2449,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     Registry_HandleClose(Handle);
     Handle = NULL;
@@ -2499,7 +2475,7 @@ Arguments:
 
 Return Value:
 
-    Handle - handle to open registry key or NULL for error.
+    Handle - Handle to open registry key or NULL in case of error.
 
 --*/
 {
@@ -2511,8 +2487,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
    // Delete the key.
    //
@@ -2541,13 +2517,13 @@ Routine Description:
 Arguments:
 
     DmfModule - This Module's handle.
-    Handle - handle to open registry key.
-    Name - path name of the key relative to handle
-    TryToCreate - indicates if the function should call create instead of open
+    Handle - Handle to open registry key.
+    Name - Path name of the key relative to handle.
+    TryToCreate - Indicates if the function should call create instead of open.
 
 Return Value:
 
-    Handle - handle to open registry key or NULL for error.
+    Handle - Handle to open registry key or NULL in case of error.
 
 --*/
 {
@@ -2559,8 +2535,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     handle = Registry_HandleOpenByHandle(Handle,
                                          Name,
@@ -2569,6 +2545,59 @@ Return Value:
     FuncExit(DMF_TRACE, "handle=0x%p", handle);
 
     return handle;
+}
+
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+DMF_Registry_HandleOpenById(
+    _In_ DMFMODULE DmfModule,
+    _In_ ULONG PredefinedKeyId,
+    _In_ ULONG AccessMask,
+    _Out_ HANDLE* RegistryHandle
+    )
+/*++
+
+Routine Description:
+
+    Open a predefined registry key.
+
+Arguments:
+
+    DmfModule - This Module's handle.
+    PredefinedKeyId - The Id of the predefined key to open.
+                      See IoOpenDeviceRegistryKey documentation for a list of Ids.
+    AccessMask - Access mask to use to open the handle.
+    RegistryHandle - Handle to open registry key or NULL in case of error.
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    NTSTATUS ntStatus;
+    WDFDEVICE device;
+
+    UNREFERENCED_PARAMETER(DmfModule);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
+
+    device = DMF_ParentDeviceGet(DmfModule);
+
+    ntStatus = Registry_HandleOpenByPredefinedKey(device,
+                                                  PredefinedKeyId,
+                                                  AccessMask,
+                                                  RegistryHandle);
+
+    FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
+
+    return ntStatus;
 }
 
 _Must_inspect_result_
@@ -2587,11 +2616,11 @@ Routine Description:
 Arguments:
 
     DmfModule - This Module's handle.
-    Name - path name of the key relative to handle
+    Name - Path name of the key relative to handle.
 
 Return Value:
 
-    Handle - handle to open registry key or NULL for error.
+    Handle - Handle to open registry key or NULL in case of error.
 
 --*/
 {
@@ -2603,8 +2632,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     handle = Registry_HandleOpenByName(Name);
 
@@ -2632,10 +2661,11 @@ Routine Description:
 Arguments:
 
     DmfModule - This Module's handle.
-    Name - path name of the key relative to handle. NULL to open the device instance registry key.
+    Name - Path name of the key relative to handle. NULL to open the device instance registry key.
+           Note: Use DMF_Registry_HandleOpenById() instead to open the Device Key.
     AccessMask - Access mask to use to open the handle.
     Create - Creates the key if it cannot be opened.
-    RegistryHandle - Handle to open registry key or NULL for error.
+    RegistryHandle - Handle to open registry key or NULL in case of error.
 
 Return Value:
 
@@ -2652,8 +2682,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     device = DMF_ParentDeviceGet(DmfModule);
 
@@ -2666,9 +2696,12 @@ Return Value:
     }
     else
     {
-        ntStatus = Registry_HandleOpenByDevice(device,
-                                               AccessMask,
-                                               RegistryHandle);
+        // Deprecated path. Use DMF_Registry_HandleOpenById() instead.
+        //
+        ntStatus = Registry_HandleOpenByPredefinedKey(device,
+                                                      PLUGPLAY_REGKEY_DEVICE,
+                                                      AccessMask,
+                                                      RegistryHandle);
     }
 
     FuncExit(DMF_TRACE, "ntStatus=%!STATUS!", ntStatus);
@@ -2723,8 +2756,8 @@ Return Value:
     ASSERT(ValueName != NULL);
     ASSERT(*ValueName != L'\0');
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_HandleOpenByNameEx(DmfModule,
                                                RegistryPathName,
@@ -2803,8 +2836,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (BufferSize > 0)) || 
            ((NULL == Buffer) && (0 == BufferSize) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_HandleOpenByNameEx(DmfModule,
                                                RegistryPathName,
@@ -2891,8 +2924,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (BufferSize > 0)) || 
            ((NULL == Buffer) && (0 == BufferSize) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueRead(DmfModule,
                                              RegistryPathName,
@@ -2942,8 +2975,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueRead(DmfModule,
                                              RegistryPathName,
@@ -3002,8 +3035,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueReadDword(DmfModule,
                                                   RegistryPathName,
@@ -3083,8 +3116,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (NumberOfCharacters > 0)) || 
            ((NULL == Buffer) && (0 == NumberOfCharacters) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_PathAndValueRead(DmfModule,
@@ -3135,8 +3168,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueRead(DmfModule,
                                              RegistryPathName,
@@ -3195,8 +3228,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueReadQword(DmfModule,
                                                   RegistryPathName,
@@ -3276,8 +3309,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (NumberOfCharacters > 0)) || 
            ((NULL == Buffer) && (0 == NumberOfCharacters) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_PathAndValueRead(DmfModule,
@@ -3339,8 +3372,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_HandleOpenByNameEx(DmfModule,
                                                RegistryPathName,
@@ -3415,8 +3448,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueWrite(DmfModule,
                                               RegistryPathName,
@@ -3464,8 +3497,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueWrite(DmfModule,
                                               RegistryPathName,
@@ -3522,8 +3555,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_PathAndValueWrite(DmfModule,
@@ -3572,8 +3605,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_PathAndValueWrite(DmfModule,
                                               RegistryPathName,
@@ -3630,8 +3663,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_PathAndValueWrite(DmfModule,
@@ -3661,11 +3694,11 @@ Routine Description:
 Arguments:
 
     DmfModule - This Module's handle.
-    Name - Path name of the key relative to handle
+    Name - Path name of the key relative to handle.
 
 Return Value:
 
-    Handle - handle to open registry key or NULL for error.
+    Handle - Handle to open registry key or NULL in case of error.
 
 --*/
 {
@@ -3678,8 +3711,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = Registry_HandleOpenByNameEx(Name,
                                            KEY_SET_VALUE,
@@ -3818,8 +3851,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     returnValue = Registry_SubKeysFromHandleEnumerate(Handle,
                                                       ClientCallback,
@@ -3869,8 +3902,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
    // It is the substring that is searched for inside the enumerated sub keys.
    //
@@ -3928,8 +3961,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = Registry_DeferredOperationAdd(DmfModule,
                                              RegistryTree,
@@ -3973,8 +4006,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = Registry_TreeWrite(DmfModule,
                                   RegistryTree,
@@ -4021,8 +4054,8 @@ Return Value:
     ASSERT(ValueName != NULL);
     ASSERT(*ValueName != L'\0');
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = Registry_ValueActionAlways(Registry_ActionTypeDelete,
                                           DmfModule,
@@ -4076,8 +4109,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
    // Value type is not needed for Delete.
    // ValueDataToCompare is optional...it will be passed to comparison function.
@@ -4144,8 +4177,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (BufferSize > 0)) ||
         ((NULL == Buffer) && (0 == BufferSize) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
    // NOTE: Bytes read is optional. Clear in case of error.
    //
@@ -4215,8 +4248,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (BufferSize > 0)) || 
            ((NULL == Buffer) && (0 == BufferSize) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueRead(DmfModule,
                                       Handle,
@@ -4272,8 +4305,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueRead(DmfModule,
                                       Handle,
@@ -4337,8 +4370,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueReadDword(DmfModule,
                                            Handle,
@@ -4417,8 +4450,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (NumberOfCharacters > 0)) || 
            ((NULL == Buffer) && (0 == NumberOfCharacters) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_ValueRead(DmfModule,
@@ -4475,8 +4508,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueRead(DmfModule,
                                       Handle,
@@ -4540,8 +4573,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueReadQword(DmfModule,
                                            Handle,
@@ -4620,8 +4653,8 @@ Return Value:
     ASSERT(((Buffer != NULL) && (NumberOfCharacters > 0)) ||
         ((NULL == Buffer) && (0 == NumberOfCharacters) && (BytesRead != NULL)));
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_ValueRead(DmfModule,
@@ -4680,8 +4713,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = Registry_ValueActionAlways(Registry_ActionTypeWrite,
                                           DmfModule,
@@ -4739,8 +4772,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueWrite(DmfModule,
                                        Handle,
@@ -4792,8 +4825,8 @@ Return Value:
     ASSERT(ValueName != NULL);
     ASSERT(*ValueName != L'\0');
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueWrite(DmfModule,
                                        Handle,
@@ -4851,8 +4884,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = Registry_ValueActionIfNeeded(Registry_ActionTypeWrite,
                                             DmfModule,
@@ -4912,8 +4945,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_ValueWrite(DmfModule,
@@ -4966,8 +4999,8 @@ Return Value:
     ASSERT(ValueName != NULL);
     ASSERT(*ValueName != L'\0');
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     ntStatus = DMF_Registry_ValueWrite(DmfModule,
                                        Handle,
@@ -5023,8 +5056,8 @@ Return Value:
     ASSERT(*ValueName != L'\0');
     ASSERT(Buffer != NULL);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_Registry);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 Registry);
 
     bufferSizeBytes = NumberOfCharacters * sizeof(WCHAR);
     ntStatus = DMF_Registry_ValueWrite(DmfModule,

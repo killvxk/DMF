@@ -59,6 +59,19 @@ typedef struct
     ULONG SerialWaitMask;
 } SerialTarget_Configuration;
 
+typedef enum
+{
+    // Module is opened in PrepareHardware and closed in ReleaseHardware.
+    //
+    SerialTarget_OpenOption_PrepareHardware = 0,
+    // Module is opened in D0Entry when system transitions from SX to S0.
+    //
+    SerialTarget_OpenOption_D0EntrySystemPowerUp,
+    // Module is opened in D0Entry and closed in D0Exit.
+    //
+    SerialTarget_OpenOption_D0Entry
+} SerialTarget_OpenOption;
+
 // Client Driver callback function to get Configuration parameters.
 //
 typedef
@@ -82,6 +95,9 @@ typedef struct
     // Share Access.
     //
     ULONG ShareAccess;
+    // Module's Open option.
+    //
+    SerialTarget_OpenOption ModuleOpenOption;
     // Child Request Stream Module.
     //
     DMF_CONFIG_ContinuousRequestTarget ContinuousRequestTargetModuleConfig;
@@ -122,7 +138,7 @@ DMF_SerialTarget_Send(
     _In_ ContinuousRequestTarget_RequestType RequestType,
     _In_ ULONG RequestIoctl,
     _In_ ULONG RequestTimeoutMilliseconds,
-    _In_opt_ EVT_DMF_ContinuousRequestTarget_SingleAsynchronousBufferOutput* EvtContinuousRequestTargetSingleAsynchronousRequest,
+    _In_opt_ EVT_DMF_ContinuousRequestTarget_SendCompletion* EvtContinuousRequestTargetSingleAsynchronousRequest,
     _In_opt_ VOID* SingleAsynchronousRequestClientContext
     );
 
@@ -146,7 +162,7 @@ DMF_SerialTarget_StreamStart(
     _In_ DMFMODULE DmfModule
     );
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DMF_SerialTarget_StreamStop(
     _In_ DMFMODULE DmfModule

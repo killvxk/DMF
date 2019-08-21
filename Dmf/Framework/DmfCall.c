@@ -9,8 +9,12 @@ Module Name:
 
 Abstract:
 
-    DMF Implementation.
-    This Module contains Client interfaces for Module Callbacks.
+    DMF Implementation:
+    Functions in this file dispatch callbacks from WDF to every instantiated Module and
+    its Child Modules. Also, several helper functions are included in this file.
+
+    NOTE: Make sure to set "compile as C++" option.
+    NOTE: Make sure to #define DMF_USER_MODE in UMDF Drivers.
 
 Environment:
 
@@ -22,20 +26,6 @@ Environment:
 #include "DmfIncludeInternal.h"
 
 #include "DmfCall.tmh"
-
-////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Client Driver Calls
-//
-// A function that will "Invoke a callback" is a function that the Client Driver calls to
-// execute a predefined DMF Module Callback functions. Doing so, also means that the
-// target DMF Module's Child DMF Modules will also be automatically called (when
-// appropriate).
-//
-////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////
-//
 
 // DMF dispatches all callbacks it receives from WDF to each Module in the Module Collection
 // (Parent Module) as well as to each of its Child Modules. Depending on the callback, DMF 
@@ -70,10 +60,14 @@ Environment:
 // | DMF_Module_QueryRemove                   |                                                |
 // | DMF_Module_QueryStop                     |                                                |
 // ----------------------------------------------------------------------------------------------
+//
+// In Child First callbacks, Child Modules will be iterated from first to last (using DmfChildObjectIterateForward).
+// In Parent First callbacks, Child Modules will be iterated from last to first (using DmfChildObjectIterateBackward).
+//
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Module Callback Invoke Function Helpers
+// Module Callback Child Module Helper Functions
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -111,14 +105,16 @@ Return Value:
         //
         childDmfObject = NULL;
         ChildObjectInterationContext->NextChildObjectListEntry = NULL;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = NULL;
         ChildObjectInterationContext->ParentObject = NULL;
     }
     else
     {
-        childDmfObject = CONTAINING_RECORD(ParentObject->ChildObjectList.Flink,
+        childDmfObject = CONTAINING_RECORD(firstChildListEntry,
                                            DMF_OBJECT,
                                            ChildListEntry);
         ChildObjectInterationContext->NextChildObjectListEntry = firstChildListEntry->Flink;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = firstChildListEntry->Blink;
         ChildObjectInterationContext->ParentObject = ParentObject;
     }
 
@@ -158,6 +154,7 @@ Return Value:
                                            DMF_OBJECT,
                                            ChildListEntry);
         ChildObjectInterationContext->NextChildObjectListEntry = nextChildListEntry->Flink;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = nextChildListEntry->Blink;
     }
     else
     {
@@ -165,6 +162,104 @@ Return Value:
         //
         childDmfObject = NULL;
         ChildObjectInterationContext->NextChildObjectListEntry = NULL;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = NULL;
+        ChildObjectInterationContext->ParentObject = NULL;
+    }
+
+    return childDmfObject;
+}
+
+DMF_OBJECT*
+DmfChildObjectLastGet(
+    _In_ DMF_OBJECT* ParentObject,
+    _Out_ CHILD_OBJECT_INTERATION_CONTEXT* ChildObjectInterationContext
+    )
+/*++
+
+Routine Description:
+
+    Given a Parent Object and a Child Object Iteration Context, return the Parent Object's last 
+    Child Object. Then, initialize the Child Object Iteration Context for subsequent iterations.
+
+Arguments:
+
+    ParentObject - The given Parent Object.
+    ChildObjectInterationContext - The given Child Object Iteration Context
+
+Return Value:
+
+    The last Child Object or NULL if no Child Object is present.
+
+--*/
+{
+    DMF_OBJECT* childDmfObject;
+    LIST_ENTRY* lastChildListEntry;
+
+    lastChildListEntry = ParentObject->ChildObjectList.Blink;
+    if (lastChildListEntry == &ParentObject->ChildObjectList)
+    {
+        // There are no Children.
+        //
+        childDmfObject = NULL;
+        ChildObjectInterationContext->NextChildObjectListEntry = NULL;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = NULL;
+        ChildObjectInterationContext->ParentObject = NULL;
+    }
+    else
+    {
+        childDmfObject = CONTAINING_RECORD(ParentObject->ChildObjectList.Blink,
+                                           DMF_OBJECT,
+                                           ChildListEntry);
+        ChildObjectInterationContext->NextChildObjectListEntry = lastChildListEntry->Flink;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = lastChildListEntry->Blink;
+        ChildObjectInterationContext->ParentObject = ParentObject;
+    }
+
+    return childDmfObject;
+}
+
+DMF_OBJECT*
+DmfChildObjectPreviousGet(
+    _Inout_ CHILD_OBJECT_INTERATION_CONTEXT* ChildObjectInterationContext
+    )
+/*++
+
+Routine Description:
+
+    Given a Child Object Iteration Context, return the next Child Object.
+
+Arguments:
+
+    ChildObjectInterationContext - The given Child Object Iteration Context
+
+Return Value:
+
+    The next Child Object or NULL if no next Child Object is present.
+
+--*/
+{
+    DMF_OBJECT* childDmfObject;
+    LIST_ENTRY* previousChildListEntry;
+
+    ASSERT(ChildObjectInterationContext->ParentObject != NULL);
+    ASSERT(ChildObjectInterationContext->NextChildObjectListEntry != NULL);
+
+    previousChildListEntry = ChildObjectInterationContext->PreviousChildObjectListEntry;
+    if (previousChildListEntry != &ChildObjectInterationContext->ParentObject->ChildObjectList)
+    {
+        childDmfObject = CONTAINING_RECORD(previousChildListEntry,
+                                           DMF_OBJECT,
+                                           ChildListEntry);
+        ChildObjectInterationContext->NextChildObjectListEntry = previousChildListEntry->Flink;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = previousChildListEntry->Blink;
+    }
+    else
+    {
+        // There are no more Children.
+        //
+        childDmfObject = NULL;
+        ChildObjectInterationContext->NextChildObjectListEntry = NULL;
+        ChildObjectInterationContext->PreviousChildObjectListEntry = NULL;
         ChildObjectInterationContext->ParentObject = NULL;
     }
 
@@ -176,27 +271,41 @@ Return Value:
 //
 typedef NTSTATUS (*DMF_SingleParameterNtStatus)(_In_ DMFMODULE DmfModule);
 typedef VOID (*DMF_SingleParameterVoid)(_In_ DMFMODULE DmfModule);
+typedef DMF_OBJECT* (*DMF_ChildObjectInitialGet)(_In_ DMF_OBJECT* ParentObject,
+                                              _Out_ CHILD_OBJECT_INTERATION_CONTEXT* ChildObjectInterationContext);
+typedef DMF_OBJECT* (*DMF_ChildObjectIterationGet)(_Inout_ CHILD_OBJECT_INTERATION_CONTEXT* ChildObjectInterationContext);
+
+typedef struct _DMF_ChildObjectGet
+{
+    DMF_ChildObjectInitialGet ChildObjectIntialGet;
+    DMF_ChildObjectIterationGet ChildObjectIterationGet;
+} DMF_ChildObjectGet;
+
+DMF_ChildObjectGet DmfChildObjectIterateForward = { DmfChildObjectFirstGet, DmfChildObjectNextGet };
+DMF_ChildObjectGet DmfChildObjectIterateBackward = { DmfChildObjectLastGet, DmfChildObjectPreviousGet };
 
 NTSTATUS
 DMF_ChildDispatchSingleParameterNtStatus(
     _In_ DMFMODULE DmfModule,
-    _In_ DMF_SingleParameterNtStatus ChildRecursiveFunction
+    _In_ DMF_SingleParameterNtStatus ChildRecursiveFunction,
+    _In_ DMF_ChildObjectGet* ChildObjectGet
     )
 /*++
 
 Routine Description:
 
-    Given a DMF Module, this function calls the given Wdf callback for each child Module.
-    The given Wdf Callback returns NTSTATUS and takes WdfDevice associated with the given DMF Module.
+    Given a DMF Module, this function calls the given WDF callback for each child Module.
+    The given WDF Callback returns NTSTATUS and takes WdfDevice associated with the given DMF Module.
 
 Arguments:
 
     DmfModule - The given DMF Module.
-    ChildRecursiveFunction - The given Wdf callback.
+    ChildRecursiveFunction - The given WDF callback.
+    ChildObjectGet - The given iteration callbacks.
 
 Return Value:
 
-    The given Wdf callback's return value.
+    The given WDF callback's return value.
 
 --*/
 {
@@ -208,8 +317,8 @@ Return Value:
     ntStatus = STATUS_SUCCESS;
     parentDmfObject = DMF_ModuleToObject(DmfModule);
 
-    childDmfObject = DmfChildObjectFirstGet(parentDmfObject,
-                                            &childObjectIterationContext);
+    childDmfObject = ChildObjectGet->ChildObjectIntialGet(parentDmfObject,
+                                                          &childObjectIterationContext);
     while (childDmfObject != NULL)
     {
         DMFMODULE dmfModuleChild;
@@ -220,7 +329,7 @@ Return Value:
         {
             break;
         }
-        childDmfObject = DmfChildObjectNextGet(&childObjectIterationContext);
+        childDmfObject = ChildObjectGet->ChildObjectIterationGet(&childObjectIterationContext);
     }
 
     return ntStatus;
@@ -229,19 +338,20 @@ Return Value:
 VOID
 DMF_ChildDispatchSingleParameterVoid(
     _In_ DMFMODULE DmfModule,
-    _In_ DMF_SingleParameterVoid ChildRecursiveFunction
+    _In_ DMF_SingleParameterVoid ChildRecursiveFunction,
+    _In_ DMF_ChildObjectGet* ChildObjectGet
     )
 /*++
 
 Routine Description:
 
-    Given a DMF Module, this function calls the given Wdf callback for each child Module.
-    The given Wdf Callback returns VOID and takes WdfDevice associated with the given DMF Module.
+    Given a DMF Module, this function calls the given WDF callback for each child Module.
+    The given WDF Callback returns VOID and takes WdfDevice associated with the given DMF Module.
 
 Arguments:
 
     DmfModule - The given DMF Module.
-    ChildRecursiveFunction - The given Wdf callback.
+    ChildRecursiveFunction - The given WDF callback.
 
 Return Value:
 
@@ -255,22 +365,25 @@ Return Value:
 
     parentDmfObject = DMF_ModuleToObject(DmfModule);
 
-    childDmfObject = DmfChildObjectFirstGet(parentDmfObject,
-                                            &childObjectIterationContext);
+    childDmfObject = ChildObjectGet->ChildObjectIntialGet(parentDmfObject,
+                                                          &childObjectIterationContext);
     while (childDmfObject != NULL)
     {
         DMFMODULE dmfModuleChild;
 
         dmfModuleChild = DMF_ObjectToModule(childDmfObject);
         ChildRecursiveFunction(dmfModuleChild);
-        childDmfObject = DmfChildObjectNextGet(&childObjectIterationContext);
+        childDmfObject = ChildObjectGet->ChildObjectIterationGet(&childObjectIterationContext);
     }
 }
 
-// Save a DMFMODULE in a WDF Object.
-// NOTE: Not all WDFOBJECT have access to Parent so this helper is necessary
-//       for those cases.
+////////////////////////////////////////////////////////////////////////////////////////////////////
 //
+// Helper Functions for Module Authors
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
 VOID
 DMF_ModuleInContextSave(
     _In_ WDFOBJECT WdfObject,
@@ -280,12 +393,15 @@ DMF_ModuleInContextSave(
 
 Routine Description:
 
-    Given a Wdf Object and a DMF Module, this function stores the given DMF Module 
-    in the context of the given Wdf Object.
+    Given a WDF Object and a DMF Module, this function stores the given DMF Module 
+    in the context of the given WDF Object.
+
+    NOTE: Not all WDFOBJECT have access to Parent so this helper is necessary
+          for those cases.
 
 Arguments:
 
-    WdfObject - The given Wdf Object.
+    WdfObject - The given WDF Object.
     DmfModule - The given DMF Module.
 
 Return Value:
@@ -327,7 +443,7 @@ Arguments:
 
 Return Value:
 
-    NTSTATUS
+    NTSTATUS from the Module's Transport Method.
 
 --*/
 {
@@ -357,14 +473,14 @@ Return Value:
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
-DMF_Module_Destroy(
+DMF_ModuleTreeDestroy(
     _In_ DMFMODULE DmfModule
     )
 /*++
 
 Routine Description:
 
-    Given a DMF Module, this function closes and destroys the Module.
+    Given a DMF Module, this function destroys the Module.
 
 Arguments:
 
@@ -381,24 +497,113 @@ Return Value:
     dmfObject = DMF_ModuleToObject(DmfModule);
     ASSERT(dmfObject != NULL);
 
-    // If it is a Dynamic Module automatically close it before it is destroyed.
-    // (Client has no access to the Close API.)
-    //
-    if (dmfObject->DynamicModule)
-    {
-        DMF_Module_CloseOrUnregisterNotificationOnDestroy(DmfModule);
-    }
+    ASSERT(! dmfObject->DynamicModuleImmediate);
 
     // Dispatch callback to Child DMF Modules first.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_Destroy);
+                                         DMF_ModuleTreeDestroy,
+                                         &DmfChildObjectIterateForward);
 
     // Dispatch callback to the given Parent DMF Module next.
     //
     ASSERT(dmfObject->ModuleDescriptor.CallbacksDmf->ModuleInstanceDestroy != NULL);
     (dmfObject->ModuleDescriptor.CallbacksDmf->ModuleInstanceDestroy)(DmfModule);
+
+    // The Module Callback always does this. Do it for the Module.
+    //
+    DMF_ModuleDestroy(DmfModule, 
+                      TRUE);
 }
+
+_Function_class_(EVT_WDF_OBJECT_CONTEXT_CLEANUP)
+_IRQL_requires_same_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+DmfEvtDynamicModuleCleanupCallback(
+    _In_ WDFOBJECT Object
+    )
+/*++
+
+Routine Description:
+
+    Clean up callback when a Dynamic DMFMODULE is deleted. This callback will close the Module
+    and destroy its Child Modules. Then, it calls the Client's CleanUp callback, if any.
+
+Arguments:
+
+    Object - DMFMODULE to delete.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMFMODULE dmfModule;
+    DMF_OBJECT* dmfObject;
+    PFN_WDF_OBJECT_CONTEXT_CLEANUP clientEvtCleanupCallback;
+
+    // NOTE: DMFMODULE should always be deleted in PASSIVE_LEVEL.
+    // (Even though it can technically be called at DISPATCH_LEVEL, Clients should
+    // not allow this to happen. It means Parents of Modules should not be WDFMEMORY
+    // objects using NonPaged Pool, nor a WDFREQUEST.)
+    //
+#if !defined(DMF_USER_MODE)
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+#endif
+
+    dmfModule = (DMFMODULE)Object;
+    dmfObject = DMF_ModuleToObject(dmfModule);
+
+    // Save off Client's callback so it can be called after object is destroyed.
+    //
+    clientEvtCleanupCallback = dmfObject->ClientEvtCleanupCallback;
+
+    // Since  it is a Dynamic Module automatically close it before it is destroyed.
+    // (Client has no access to the Close API.)
+    //
+    ASSERT(dmfObject->DynamicModuleImmediate);
+    DMF_Module_CloseOrUnregisterNotificationOnDestroy(dmfModule);
+
+    // Dispatch callback to Child DMF Modules first.
+    // 'The current function is permitted to run at an IRQ level above the maximum permitted'
+    //
+    #pragma warning(suppress:28118)
+    DMF_ChildDispatchSingleParameterVoid(dmfModule,
+                                         DMF_ModuleTreeDestroy,
+                                         &DmfChildObjectIterateBackward);
+
+    // Dispatch callback to the given Parent DMF Module next.
+    //
+    ASSERT(dmfObject->ModuleDescriptor.CallbacksDmf->ModuleInstanceDestroy != NULL);
+    // 'The current function is permitted to run at an IRQ level above the maximum permitted'
+    //
+    #pragma warning(suppress:28118)
+    (dmfObject->ModuleDescriptor.CallbacksDmf->ModuleInstanceDestroy)(dmfModule);
+
+    // The Module Callback always does this. Do it for the Module.
+    // NOTE: Don't delete the memory because it will be deleted by WDF.
+    // 'The current function is permitted to run at an IRQ level above the maximum permitted'
+    //
+    #pragma warning(suppress:28118)
+    DMF_ModuleDestroy(dmfModule, 
+                      FALSE);
+
+    // Next, allow Client to clean up.
+    //
+    if (clientEvtCleanupCallback != NULL)
+    {
+        clientEvtCleanupCallback(Object);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// DMF calls these functions to execute Modules' WDF callbacks.
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
@@ -821,8 +1026,6 @@ Exit:
     return ntStatus;
 }
 
-// TRUE means the Module handled the request and no other Module needs to check it.
-//
 _IRQL_requires_max_(DISPATCH_LEVEL)
 BOOLEAN
 DMF_Module_QueueIoRead(
@@ -849,7 +1052,9 @@ Arguments:
 
 Return Value:
 
-    None
+    TRUE if either the given DMF Module or it children handle the IOCTL
+    (and it should not be handled by any other Module).
+    FALSE, otherwise.
 
 --*/
 {
@@ -903,8 +1108,6 @@ Exit:
     return returnValue;
 }
 
-// TRUE means the Module handled the request and no other Module needs to check it.
-//
 _IRQL_requires_max_(DISPATCH_LEVEL)
 BOOLEAN
 DMF_Module_QueueIoWrite(
@@ -931,7 +1134,9 @@ Arguments:
 
 Return Value:
 
-    None
+    TRUE if either the given DMF Module or it children handle the IOCTL
+    (and it should not be handled by any other Module).
+    FALSE, otherwise.
 
 --*/
 {
@@ -985,8 +1190,6 @@ Exit:
     return returnValue;
 }
 
-// TRUE means the Module handled the request and no other Module needs to check it.
-//
 _IRQL_requires_max_(DISPATCH_LEVEL)
 BOOLEAN
 DMF_Module_DeviceIoControl(
@@ -1017,7 +1220,8 @@ Arguments:
 
 Return Value:
 
-    TRUE if either the given DMF Module or it children handle the IOCTL.
+    TRUE if either the given DMF Module or it children handle the IOCTL
+    (and it should not be handled by any other Module).
     FALSE, otherwise.
 
 --*/
@@ -1076,8 +1280,6 @@ Exit:
     return returnValue;
 }
 
-// TRUE means the Module handled the request and no other Module needs to check it.
-//
 _IRQL_requires_max_(DISPATCH_LEVEL)
 BOOLEAN
 DMF_Module_InternalDeviceIoControl(
@@ -1108,7 +1310,8 @@ Arguments:
 
 Return Value:
 
-    TRUE if either the given DMF Module or it children handle the IOCTL.
+    TRUE if either the given DMF Module or it children handle the IOCTL
+    (and it should not be handled by any other Module).
     FALSE, otherwise.
 
 --*/
@@ -1204,7 +1407,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_SelfManagedIoCleanup);
+                                         DMF_Module_SelfManagedIoCleanup,
+                                         &DmfChildObjectIterateBackward);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -1244,7 +1448,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_SelfManagedIoFlush);
+                                         DMF_Module_SelfManagedIoFlush,
+                                         &DmfChildObjectIterateBackward);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -1280,7 +1485,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_SelfManagedIoInit);
+                                                        DMF_Module_SelfManagedIoInit,
+                                                        &DmfChildObjectIterateForward);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -1334,7 +1540,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_SelfManagedIoSuspend);
+                                                        DMF_Module_SelfManagedIoSuspend,
+                                                        &DmfChildObjectIterateBackward);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -1377,7 +1584,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_SelfManagedIoRestart);
+                                                        DMF_Module_SelfManagedIoRestart,
+                                                        &DmfChildObjectIterateForward);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -1430,7 +1638,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_SurpriseRemoval);
+                                         DMF_Module_SurpriseRemoval,
+                                         &DmfChildObjectIterateBackward);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -1471,7 +1680,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_QueryRemove);
+                                                        DMF_Module_QueryRemove,
+                                                        &DmfChildObjectIterateBackward);
     if (!NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -1520,7 +1730,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_QueryStop);
+                                                        DMF_Module_QueryStop,
+                                                        &DmfChildObjectIterateBackward);
     if (!NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -1691,7 +1902,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_ArmWakeFromS0);
+                                                        DMF_Module_ArmWakeFromS0,
+                                                        &DmfChildObjectIterateBackward);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -1734,7 +1946,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_DisarmWakeFromS0);
+                                         DMF_Module_DisarmWakeFromS0,
+                                         &DmfChildObjectIterateForward);
 
     // Dispatch callback to the given Parent DMF Module next.
     //
@@ -1774,7 +1987,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_WakeFromS0Triggered);
+                                         DMF_Module_WakeFromS0Triggered,
+                                         &DmfChildObjectIterateForward);
 
     // Dispatch callback to the given Parent DMF Module next.
     //
@@ -1885,7 +2099,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_DisarmWakeFromSx);
+                                         DMF_Module_DisarmWakeFromSx,
+                                         &DmfChildObjectIterateForward);
 
     // Dispatch callback to the given Parent DMF Module next.
     //
@@ -1925,7 +2140,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_WakeFromSxTriggered);
+                                         DMF_Module_WakeFromSxTriggered,
+                                         &DmfChildObjectIterateForward);
 
     // Dispatch callback to the given Parent DMF Module next.
     //
@@ -2192,7 +2408,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_NotificationRegister);
+                                                        DMF_Module_NotificationRegister,
+                                                        &DmfChildObjectIterateForward);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -2261,7 +2478,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_NotificationUnregister);
+                                         DMF_Module_NotificationUnregister,
+                                         &DmfChildObjectIterateBackward);
 }
 
 NTSTATUS
@@ -2273,8 +2491,6 @@ DMF_ModuleOpen(
 Routine Description:
 
     Invoke the Open Callback for a given DMF Module.
-    First, each of the Child DMF Modules' corresponding callbacks are called.
-    Next, the given DMF Module's corresponding callback is called.
     NOTE: This call is provided for Clients that manually open the Module. In most cases,
           modules are automatically opened, so it is rare that this call be used.
           It might be used in cases where a DMF Module must be created/opened/closed/destroyed
@@ -2286,53 +2502,23 @@ Arguments:
 
 Return Value:
 
-    STATUS_SUCCESS if all children return STATUS_SUCCESS and the given DMF Module
-    does not encounter an error.
+    STATUS_SUCCESS if the given DMF Module does not encounter an error.
     If there is an error, then NTSTATUS code of the first child Module that encounters the
     error, or the NTSTATUS code of the given DMF Module.
 
 --*/
 {
     NTSTATUS ntStatus;
-    DMF_OBJECT* parentDmfObject;
-    DMF_OBJECT* childDmfObject;
-    CHILD_OBJECT_INTERATION_CONTEXT childObjectIterationContext;
+    DMF_OBJECT* dmfObject;
 
-    parentDmfObject = DMF_ModuleToObject(DmfModule);
+    dmfObject = DMF_ModuleToObject(DmfModule);
 
     ntStatus = STATUS_SUCCESS;
 
-    if (!DMF_IsObjectTypeOpenNotify(parentDmfObject))
-    {
-        // Dispatch callback to Child DMF Modules first.
-        //
-        childDmfObject = DmfChildObjectFirstGet(parentDmfObject,
-                                                &childObjectIterationContext);
-        while (childDmfObject != NULL)
-        {
-            DMFMODULE dmfModuleChild;
-
-            dmfModuleChild = DMF_ObjectToModule(childDmfObject);
-            ntStatus = DMF_ModuleOpen(dmfModuleChild);
-            if (! NT_SUCCESS(ntStatus))
-            {
-                goto Exit;
-            }
-
-            childDmfObject = DmfChildObjectNextGet(&childObjectIterationContext);
-        }
-    }
-    else
-    {
-        // Modules opened asynchronously only open themselves, not their children because the
-        // children either open due to other callbacks or also open asynchronously.
-        //
-    }
-
     // Dispatch callback to the given Parent DMF Module next.
     //
-    ASSERT(parentDmfObject->InternalCallbacksDmf.DeviceOpen != NULL);
-    ntStatus = (parentDmfObject->InternalCallbacksDmf.DeviceOpen)(DmfModule);
+    ASSERT(dmfObject->InternalCallbacksDmf.DeviceOpen != NULL);
+    ntStatus = (dmfObject->InternalCallbacksDmf.DeviceOpen)(DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -2376,7 +2562,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules first.
     //
     ntStatus = DMF_ChildDispatchSingleParameterNtStatus(DmfModule,
-                                                        DMF_Module_OpenOrRegisterNotificationOnCreate);
+                                                        DMF_Module_OpenOrRegisterNotificationOnCreate,
+                                                        &DmfChildObjectIterateForward);
     if (! NT_SUCCESS(ntStatus))
     {
         goto Exit;
@@ -2426,9 +2613,9 @@ DMF_ModuleReference(
 
 Routine Description:
 
-    If a Module is open, acquires the Module so it remains open until DMF_ModuleDereference is called.
-    Use this in Module Methods when a Module is opened in notification callback.
-
+    If a Module is open, acquires a reference to the Module so it remains open until 
+    DMF_ModuleDereference is called.  Use this in Module Methods when a Module is 
+    opened in notification callback.
 
 Arguments:
 
@@ -2436,8 +2623,8 @@ Arguments:
 
 Return Value:
 
-   STATUS_SUCCESS - Module is open, and reference has been acquired.
-   STATUS_INVALID_DEVICE_STATE - Module is not open
+   STATUS_SUCCESS - Module is open and reference has been acquired.
+   STATUS_INVALID_DEVICE_STATE - Module is not open.
 
 --*/
 {
@@ -2480,7 +2667,7 @@ DMF_ModuleDereference(
 
 Routine Description:
 
-    Releases the Module acquired in DMF_ModuleReference
+    Releases the Module acquired in DMF_ModuleReference.
 
 Arguments:
 
@@ -2488,7 +2675,7 @@ Arguments:
 
 Return Value:
 
-    NONE
+    None
 
 --*/
 {
@@ -2515,7 +2702,14 @@ DMF_ModuleWaitForReferenceCountToClear(
 
 Routine Description:
 
-    Dispatch Close to the given DMF Module's corresponding handler.
+    Waits for the Module's reference count to reach zero. This is used for rundown
+    management when a Module is closing but its Methods may still be called or running.
+    It allows DMF to make the Module is open while Methods that are already running
+    continue running, but disallows new Methods from starting to run.
+
+    TODO: Replace this logic with the Kernel-mode primitive that performs this logic.
+          Note, however, that the primitive is not supported in User-mode. Therefore,
+          in that case, this code is still needed.
 
 Arguments:
 
@@ -2523,7 +2717,7 @@ Arguments:
 
 Return Value:
 
-    None.
+    None
 
 --*/
 {
@@ -2537,7 +2731,6 @@ Return Value:
     dmfObject = DMF_ModuleToObject(DmfModule);
 
     FuncEntryArguments(DMF_TRACE, "DmfModule=0x%p [%s]", DmfModule, dmfObject->ClientModuleInstanceName);
-    TraceInformation(DMF_TRACE, "DmfModule=0x%p [%s]", DmfModule, dmfObject->ClientModuleInstanceName);
 
     DMF_ModuleLock(DmfModule);
 
@@ -2590,8 +2783,6 @@ DMF_ModuleClose(
 Routine Description:
 
     Invoke the Close Callback for a given DMF Module.
-    First, the given DMF Module's corresponding callback is called.
-    Next, each of the Child DMF Modules' corresponding callbacks are called.
     NOTE: This call is provided for Clients that manually open the Module. In most cases,
           modules are automatically opened, so it is rare that this call be used.
           It might be used in cases where a DMF Module must be created/opened/closed/destroyed
@@ -2603,32 +2794,18 @@ Arguments:
 
 Return Value:
 
-   None.
+    None
 
 --*/
 {
-    DMF_OBJECT* parentDmfObject;
+    DMF_OBJECT* dmfObject;
 
-    parentDmfObject = DMF_ModuleToObject(DmfModule);
+    dmfObject = DMF_ModuleToObject(DmfModule);
 
     // Dispatch callback to this Module first.
     //
-    ASSERT(parentDmfObject->InternalCallbacksDmf.DeviceClose != NULL);
-    (parentDmfObject->InternalCallbacksDmf.DeviceClose)(DmfModule);
-
-    if (!DMF_IsObjectTypeOpenNotify(parentDmfObject))
-    {
-        // Dispatch callback to Child DMF Modules next.
-        //
-        DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                             DMF_ModuleClose);
-    }
-    else
-    {
-        // Modules close asynchronously only close themselves, not their children because the
-        // children either close due to other callbacks or also close asynchronously.
-        //
-    }
+    ASSERT(dmfObject->InternalCallbacksDmf.DeviceClose != NULL);
+    (dmfObject->InternalCallbacksDmf.DeviceClose)(DmfModule);
 }
 
 VOID
@@ -2649,7 +2826,7 @@ Arguments:
 
 Return Value:
 
-   None.
+    None
 
 --*/
 {
@@ -2683,7 +2860,8 @@ Return Value:
     // Dispatch callback to Child DMF Modules next.
     //
     DMF_ChildDispatchSingleParameterVoid(DmfModule,
-                                         DMF_Module_CloseOrUnregisterNotificationOnDestroy);
+                                         DMF_Module_CloseOrUnregisterNotificationOnDestroy,
+                                         &DmfChildObjectIterateBackward);
 }
 
 // Sometimes the Thread ID of the current thread is zero. In that case, use DMF_INVALID_HANDLE_VALUE.
@@ -2774,6 +2952,7 @@ DMF_ModuleIsLocked(
 Routine Description:
 
     Returns the lock status of the given DMF Module.
+    NOTE: This function is for debug purposes only.
 
 Arguments:
 
@@ -2813,6 +2992,7 @@ DMF_ModuleLockIsPassive(
 Routine Description:
 
     Indicates if the Module lock is a passive level lock.
+    NOTE: This function is for debug purposes only.
 
 Arguments:
 
@@ -2852,6 +3032,7 @@ DMF_IsPoolTypePassiveLevel(
 Routine Description:
 
     Indicates if the given pool type is passive level.
+    NOTE: This function is for debug purposes only.
 
 Arguments:
 
@@ -2875,7 +3056,13 @@ Return Value:
         case NonPagedPoolMustSucceedSession:
         case NonPagedPoolCacheAlignedSession:
         case NonPagedPoolCacheAlignedMustSSession:
-#if !defined(_ARM_) && !defined(_ARM64_)
+#if (!defined(_ARM_) && !defined(_ARM64_)) || (!defined(POOL_NX_OPTIN_AUTO))
+        // If POOL_NX_OPTIN_AUTO is defined, it means that NonPagedPoolNx = NonPagedPool.
+        // So, don't include this case as it is a duplicate. This is the case for ARM and ARM64.
+        //
+        // NOTE: The condition has the OR so that the check is compatible with EWDK that does
+        //       not support POOL_NX_OPTIN_AUTO.
+        //
         case NonPagedPoolNx:
         case NonPagedPoolNxCacheAligned:
 #endif
@@ -2944,9 +3131,9 @@ Return Value:
 #endif
         // Sometimes the Thread ID of the current thread is zero. In that case, use DMF_INVALID_HANDLE_VALUE.
         //
-        if (dmfObject->Synchronizations[DMF_DEFAULT_LOCK_INDEX].LockHeldByThread == 0)
+        if (dmfObject->Synchronizations[AuxiliaryLockIndex + DMF_NUMBER_OF_DEFAULT_LOCKS].LockHeldByThread == 0)
         {
-            dmfObject->Synchronizations[DMF_DEFAULT_LOCK_INDEX].LockHeldByThread = DMF_INVALID_HANDLE_VALUE;
+            dmfObject->Synchronizations[AuxiliaryLockIndex + DMF_NUMBER_OF_DEFAULT_LOCKS].LockHeldByThread = DMF_INVALID_HANDLE_VALUE;
         }
     }
     else
@@ -3016,6 +3203,7 @@ DMF_ModuleAuxiliarySynchnonizationIsLocked(
 Routine Description:
 
     Returns the lock status of the given DMF Module.
+    NOTE: This function is for debug purposes only.
 
 Arguments:
 
@@ -3076,6 +3264,10 @@ Routine Description:
     First, each of the Child DMF Modules' corresponding callbacks are called.
     (Order is not particularly important.)
     Next, the given DMF Module's corresponding callback is called.
+
+    NOTE: This callback is provided so that Modules can easily indicate that the Module's
+          Open callback should be called in either PrepareHardware or D0Entry, yet still
+          acquire resources provided in PrepareHardware.
 
 Arguments:
 

@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -82,7 +83,7 @@ SymbolicLinkTarget_IoTargetDestroy(
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -144,14 +145,6 @@ DMF_SymbolicLinkTarget_Close(
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_SymbolicLinkTarget;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_SymbolicLinkTarget;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -186,23 +179,24 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_SymbolicLinkTarget;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_SymbolicLinkTarget;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_SymbolicLinkTarget);
-    DmfCallbacksDmf_SymbolicLinkTarget.DeviceOpen = DMF_SymbolicLinkTarget_Open;
-    DmfCallbacksDmf_SymbolicLinkTarget.DeviceClose = DMF_SymbolicLinkTarget_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_SymbolicLinkTarget);
+    dmfCallbacksDmf_SymbolicLinkTarget.DeviceOpen = DMF_SymbolicLinkTarget_Open;
+    dmfCallbacksDmf_SymbolicLinkTarget.DeviceClose = DMF_SymbolicLinkTarget_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_SymbolicLinkTarget,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_SymbolicLinkTarget,
                                             SymbolicLinkTarget,
                                             DMF_CONTEXT_SymbolicLinkTarget,
                                             DMF_MODULE_OPTIONS_DISPATCH,
                                             DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
 
-    DmfModuleDescriptor_SymbolicLinkTarget.CallbacksDmf = &DmfCallbacksDmf_SymbolicLinkTarget;
-    DmfModuleDescriptor_SymbolicLinkTarget.ModuleConfigSize = sizeof(DMF_CONFIG_SymbolicLinkTarget);
+    dmfModuleDescriptor_SymbolicLinkTarget.CallbacksDmf = &dmfCallbacksDmf_SymbolicLinkTarget;
 
     // ObjectAttributes must be initialized and
     // ParentObject attribute must be set to either WDFDEVICE or DMFMODULE.
@@ -210,7 +204,7 @@ Return Value:
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_SymbolicLinkTarget,
+                                &dmfModuleDescriptor_SymbolicLinkTarget,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -278,8 +272,8 @@ Return Value:
     // TODO: Correct DMF Framework to set IsClosing flag correctly when there
     //       are Child Modules.
     //
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SymbolicLinkTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SymbolicLinkTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

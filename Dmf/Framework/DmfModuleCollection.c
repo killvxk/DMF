@@ -9,12 +9,17 @@ Module Name:
 
 Abstract:
 
+    DMF Implementation:
+
     This file contains support for DMF Module Collection.
     A DMF Module Collection is a list of top level Modules that are instantiated
-    directly by the Client driver.
-    One of the tasks is to dispatch Wdf Callbacks to all the Modules in the Collection 
-    and their children. Depending on the callback, sometime the parent receives the callback
+    directly by the Client Driver.
+    One of the tasks is to dispatch WDF Callbacks to all the Modules in the Collection 
+    and their children. Depending on the callback, sometimes the parent receives the callback
     first and then the children. In other cases the inverse occurs.
+
+    NOTE: Make sure to set "compile as C++" option.
+    NOTE: Make sure to #define DMF_USER_MODE in UMDF Drivers.
 
 Environment:
 
@@ -22,6 +27,19 @@ Environment:
     User-mode Driver Framework
 
 --*/
+
+// Test Options:
+// -------------
+// NOTE: These are not to be used in production code.
+//
+
+#if defined(DEBUG)
+
+// Inject partial successful initialization of Modules in a Module Collection.
+//
+// #define USE_DMF_INJECT_FAULT_PARTIAL_OPEN
+
+#endif // defined(DEBUG)
 
 #include "DmfIncludeInternal.h"
 
@@ -263,11 +281,11 @@ DMF_ModuleCollectionHandleSet(
 
 Routine Description:
 
-    Set the Module Collection handle in the DMF Object as well as its Child Modules.
+    Set the Module Collection handle in the given DMF Object as well as its Child Modules.
 
 Arguments:
 
-    DmfModule - The given DMF Module.
+    DmfObject - The given DMF Object.
 
 Return Value:
 
@@ -387,7 +405,6 @@ Routine Description:
 
 Arguments:
 
-    DriverModuleDescriptorTable - Table of DMF Modules and their attributes to instantiate.
     ModuleCollectionHandle - Module Collection that contains the Modules that need DMF Feature initialization.
     NumberOfEntries - Number of entries in the table.
 
@@ -438,9 +455,10 @@ Return Value:
     LONG driverModuleIndex;
 
     FuncEntryArguments(DMF_TRACE, "ModuleCollectionHandle=0x%p ModuleOpenedDuring=%d", ModuleCollectionHandle, ModuleOpenedDuring);
-    TraceInformation(DMF_TRACE, "ModuleCollectionHandle=0x%p ModuleOpenedDuring=%d", ModuleCollectionHandle, ModuleOpenedDuring);
 
-    ASSERT(ModuleCollectionHandle->NumberOfClientDriverDmfModules > 0);
+    // NumberOfClientDriverDmfModules may be zero in cases where all elements of structure
+    // have not been allocated (usually due to fault injection).
+    //
     for (driverModuleIndex = 0; driverModuleIndex < ModuleCollectionHandle->NumberOfClientDriverDmfModules; driverModuleIndex++)
     {
         DMF_OBJECT* dmfObject;
@@ -476,11 +494,13 @@ DMF_ModuleCollectionDestroy(
 
 Routine Description:
 
-    Destroys all the Modules that are instantiated by the Client Driver.
+    Given a WDFOBJECT which is a DMFCOLLECTION, this function destroys all the
+    Modules that are associated with the DMFCOLLECTION. This function is designed
+    to be called directly by WDF (it is a WDF clean up callback).
 
 Arguments:
 
-    ModuleCollectionHandle - The list of all the Modules instantiated by the Client Driver.
+    Object - The given WDFOBJECT.
 
 Return Value:
 
@@ -495,7 +515,6 @@ Return Value:
     dmfCollection = (DMFCOLLECTION)Object;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", dmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", dmfCollection);
 
     if (NULL == dmfCollection)
     {
@@ -506,6 +525,22 @@ Return Value:
     }
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(dmfCollection);
+
+    // In the case of non-PnP drivers where DMF_Invoke_DeviceCallbacksCreate() has been called in DriverEntry()
+    // the Client Driver has no chance to call the corresponding DMF_Invoke_DeviceCallbacksDestroy() since this
+    // callback happens before the Client Driver's Cleanup callback. Because Modules must be Closed before they
+    // are destroyed this condition is detected and the corresponding function is called here.
+    //
+    if (moduleCollectionHandle->ManualDestroyCallbackIsPending)
+    {
+        moduleCollectionHandle->ManualDestroyCallbackIsPending = FALSE;
+        // '_Param_(2)' could be '0':  this does not adhere to the specification for the function 'DMF_Invoke_DeviceCallbacksDestroy'
+        //
+        #pragma warning(suppress:6387)
+        DMF_Invoke_DeviceCallbacksDestroy(moduleCollectionHandle->ClientDevice,
+                                          NULL,
+                                          WdfPowerDeviceD0);
+    }
 
     // Close any modules that were automatically opened after creation.
     //
@@ -529,7 +564,7 @@ Return Value:
         dmfObject = moduleCollectionHandle->ClientDriverDmfModules[driverModuleIndex];
         ASSERT(dmfObject != NULL);
         dmfModule = DMF_ObjectToModule(dmfObject);
-        DMF_Module_Destroy(dmfModule);
+        DMF_ModuleTreeDestroy(dmfModule);
         moduleCollectionHandle->ClientDriverDmfModules[driverModuleIndex] = NULL;
     }
 
@@ -577,12 +612,13 @@ DMF_ModuleCollectionDispatchNtStatus(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoInit callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMF_MODULE_COLLECTION and a callback function that takes a DMFMODULE and returns NTSTATUS,
+    call the callback function for every Module associated with the given DMF_MODULE_COLLECTION.
 
 Arguments:
 
     ModuleCollectionHandle - The list of the Client Driver's instantiated Modules.
+    ModuleCollectionDispatchFunction - The given callback function to call.
 
 Return Value:
 
@@ -594,7 +630,6 @@ Return Value:
     NTSTATUS ntStatus;
 
     FuncEntryArguments(DMF_TRACE, "ModuleCollectionHandle=0x%p", ModuleCollectionHandle);
-    TraceInformation(DMF_TRACE, "ModuleCollectionHandle=0x%p", ModuleCollectionHandle);
 
     ntStatus = STATUS_SUCCESS;
 
@@ -632,23 +667,23 @@ DMF_ModuleCollectionDispatchVoid(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoInit callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMF_MODULE_COLLECTION and a callback function that takes a DMFMODULE and returns nothing,
+    call the callback function for every Module associated with the given DMF_MODULE_COLLECTION.
 
 Arguments:
 
     ModuleCollectionHandle - The list of the Client Driver's instantiated Modules.
+    ModuleCollectionDispatchFunction - The given callback function to call.
 
 Return Value:
 
-    None
+    NTSTATUS
 
 --*/
 {
     LONG driverModuleIndex;
 
     FuncEntryArguments(DMF_TRACE, "ModuleCollectionHandle=0x%p", ModuleCollectionHandle);
-    TraceInformation(DMF_TRACE, "ModuleCollectionHandle=0x%p", ModuleCollectionHandle);
 
     for (driverModuleIndex = 0; driverModuleIndex < ModuleCollectionHandle->NumberOfClientDriverDmfModules; driverModuleIndex++)
     {
@@ -684,18 +719,19 @@ DMF_ModuleCollectionPrepareHardware(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtPrepareHardware callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDevicePrepareHardware to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    ResourcesRaw - Same as passed to EvtPrepareHardware.
-    ResourcesTranslated - Same as passed to EvtPrepareHardware.
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    ResourcesRaw - Same as passed from WDF.
+    ResourcesTranslated - Same as passed from WDF.
 
 Return Value:
 
-    STATUS_SUCCESS on success, or Error Status Code on failure.
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -705,7 +741,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -720,7 +755,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModulePrepareHardwareImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModulePrepareHardware ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModulePrepareHardware ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -759,9 +794,6 @@ Exit:
 }
 #pragma code_seg()
 
-// NOTE: DMF_ModuleCollectionPrepareHardwareCleanup is not necessary because ReleaseHardware 
-//       is always called regardless of exit status of PrepareHardware.
-//
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
@@ -773,17 +805,21 @@ DMF_ModuleCollectionReleaseHardware(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtReleaseHardware callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceReleaseHardware to
+    every Module associated with DMFCOLLECTION.
+
+    NOTE: DMF_ModuleCollectionPrepareHardwareCleanup is not necessary because ReleaseHardware 
+          is always called regardless of exit status of PrepareHardware.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    ResourcesTranslated - Same as passed to EvtReleaseHardware.
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    ResourcesTranslated - Same as passed from WDF.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -793,7 +829,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     ntStatus = STATUS_SUCCESS;
 
@@ -816,7 +851,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleReleaseHardwareImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleReleaseHardware ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleReleaseHardware ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -868,17 +903,18 @@ DMF_ModuleCollectionD0Entry(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtD0Entry callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceD0Entry to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    PreviousState - Previous WDF Power State
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    PreviousState - Same as passed from WDF.
 
 Return Value:
 
-    STATUS_SUCCESS on success, or Error Status Code on failure.
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -886,7 +922,6 @@ Return Value:
     LONG driverModuleIndex;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p PreviousState=%d", DmfCollection, PreviousState);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p PreviousState=%d", DmfCollection, PreviousState);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -901,7 +936,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleD0EntryImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleD0Entry ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleD0Entry ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -925,15 +960,6 @@ Return Value:
 
 Exit:
 
-    if (! NT_SUCCESS(ntStatus))
-    {
-        // If any call to D0Entry handlers fails: we need to close any modules that were 
-        // opened by THIS call.
-        //
-        DMF_ModuleCollectionCleanup(moduleCollectionHandle,
-                                    ModuleOpenedDuringType_D0Entry);
-    }
-
     FuncExit(DMF_TRACE, "DmfCollection=0x%p ntStatus=%!STATUS!", DmfCollection, ntStatus);
 
     return ntStatus;
@@ -952,17 +978,18 @@ DMF_ModuleCollectionD0EntryPostInterruptsEnabled(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtD0EntryPostInterruptsEnabled callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceD0EntryPostInterruptsEnabled to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    PreviousState - Previous WDF Power State
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    PreviousState - Same as passed from WDF.
 
 Return Value:
 
-    STATUS_SUCCESS on success, or Error Status Code on failure.
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -970,7 +997,6 @@ Return Value:
     LONG driverModuleIndex;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p PreviousState=%d", DmfCollection, PreviousState);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p PreviousState=%d", DmfCollection, PreviousState);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -985,7 +1011,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleD0EntryPostInterruptsEnabledImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleD0EntryPostInterruptsEnabled ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleD0EntryPostInterruptsEnabled ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -1023,13 +1049,13 @@ DMF_ModuleCollectionD0EntryCleanup(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtPrepareHardware callback if the call
-    to DMF_ModuleCollectionPrepareHardare succeeded but later operations in that
+    The Client Driver may call this function in its Device EvtDeviceD0Entry callback if the call
+    to DMF_ModuleCollectionD0Entry succeeded but later operations in that
     callback fail.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -1038,10 +1064,11 @@ Return Value:
 --*/
 {
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
+    DMF_ModuleCollectionCleanup(moduleCollectionHandle,
+                                ModuleOpenedDuringType_D0EntrySystemPowerUp);
     DMF_ModuleCollectionCleanup(moduleCollectionHandle,
                                 ModuleOpenedDuringType_D0Entry);
 
@@ -1058,17 +1085,18 @@ DMF_ModuleCollectionD0ExitPreInterruptsDisabled(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtD0ExitPreInterruptsDisabled callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceD0EntryPreInterruptsDisabled to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    TargetState - Target WDF Power State
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    TargetState - Same as passed from WDF.
 
 Return Value:
 
-    STATUS_SUCCESS on success, or Error Status Code on failure.
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1076,7 +1104,6 @@ Return Value:
     LONG driverModuleIndex;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p TargetState=%d", DmfCollection, TargetState);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p TargetState=%d", DmfCollection, TargetState);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1091,7 +1118,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleD0ExitPreInterruptsDisabledImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleD0ExitPreInterruptsDisabled ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleD0ExitPreInterruptsDisabled ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -1132,17 +1159,18 @@ DMF_ModuleCollectionD0Exit(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtD0Exit callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceD0Exit to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    TargetState - Target WDF Power State
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    TargetState - Same as passed from WDF.
 
 Return Value:
 
-    STATUS_SUCCESS on success, or Error Status Code on failure.
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1150,7 +1178,6 @@ Return Value:
     LONG driverModuleIndex;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p TargetState=%d", DmfCollection, TargetState);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p TargetState=%d", DmfCollection, TargetState);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1165,7 +1192,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleD0ExitImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleD0Exit ntStatus=%!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleD0Exit ntStatus=%!STATUS!", ntStatus);
         goto Exit;
     }
 
@@ -1208,13 +1235,13 @@ DMF_ModuleCollectionQueueIoRead(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtIoQueueIoRead callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
+    Given a DMFCOLLECTION, this function dispatches EvtQueueIoRead to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
     handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
     Queue - Client Driver's Default Queue.
     Request - The WDFREQEUST with the IOCTL's parameters.
     Length - Buffer Length for the IOCTL.
@@ -1222,7 +1249,7 @@ Arguments:
 Return Value:
 
     TRUE if any of the Modules handled the Request, FALSE otherwise.
-    In the FALSE case the Client driver is expected to handle the request.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -1230,7 +1257,6 @@ Return Value:
     BOOLEAN handled;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1245,7 +1271,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleQueueIoReadImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleQueueIoRead handled=%d", handled);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleQueueIoRead handled=%d", handled);
         goto Exit;
     }
 
@@ -1289,13 +1315,13 @@ DMF_ModuleCollectionQueueIoWrite(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtIoQueueIoWrite callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
+    Given a DMFCOLLECTION, this function dispatches EvtQueueIoWrite to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
     handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
     Queue - Client Driver's Default Queue.
     Request - The WDFREQEUST with the IOCTL's parameters.
     Length - Buffer Length for the IOCTL.
@@ -1303,7 +1329,7 @@ Arguments:
 Return Value:
 
     TRUE if any of the Modules handled the Request, FALSE otherwise.
-    In the FALSE case the Client driver is expected to handle the request.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -1311,7 +1337,6 @@ Return Value:
     BOOLEAN handled;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1326,7 +1351,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleQueueIoWriteImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleQueueIoWrite handled=%d", handled);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleQueueIoWrite handled=%d", handled);
         goto Exit;
     }
 
@@ -1372,13 +1397,13 @@ DMF_ModuleCollectionDeviceIoControl(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtIoDeviceControl callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceIoControl to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
     handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
     Queue - Client Driver's Default Queue.
     Request - The WDFREQEUST with the IOCTL's parameters.
     OutputBufferLength - Output Buffer Length for the IOCTL.
@@ -1387,8 +1412,8 @@ Arguments:
 
 Return Value:
 
-    TRUE if any of the Modules handled the IOCTL, FALSE otherwise.
-    In the FALSE case the Client driver is expected to handle the request.
+    TRUE if any of the Modules handled the Request, FALSE otherwise.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -1396,7 +1421,6 @@ Return Value:
     BOOLEAN handled;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1411,7 +1435,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleDeviceIoControlImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleDeviceIoControl handled=%d", handled);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleDeviceIoControl handled=%d", handled);
         goto Exit;
     }
 
@@ -1459,13 +1483,13 @@ DMF_ModuleCollectionInternalDeviceIoControl(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtIoInternalDeviceControl callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
+    Given a DMFCOLLECTION, this function dispatches EvtInternalDeviceIoControl to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
     handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
     Queue - Client Driver's Default Queue.
     Request - The WDFREQEUST with the IOCTL's parameters.
     OutputBufferLength - Output Buffer Length for the IOCTL.
@@ -1474,8 +1498,8 @@ Arguments:
 
 Return Value:
 
-    TRUE if any of the Modules handled the IOCTL, FALSE otherwise.
-    In the FALSE case the Client driver is expected to handle the request.
+    TRUE if any of the Modules handled the Request, FALSE otherwise.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -1483,7 +1507,6 @@ Return Value:
     BOOLEAN handled;
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1498,7 +1521,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleInternalDeviceIoControlImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleInternalDeviceIoControl handled=%d", handled);
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleInternalDeviceIoControl handled=%d", handled);
         goto Exit;
     }
 
@@ -1542,12 +1565,12 @@ DMF_ModuleCollectionSelfManagedIoCleanup(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoCleanup callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceSelfManagedIoCleanup to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -1558,7 +1581,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1571,7 +1593,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleSelfManagedIoCleanupImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoCleanup");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoCleanup");
         goto Exit;
     }
 
@@ -1594,12 +1616,12 @@ DMF_ModuleCollectionSelfManagedIoFlush(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoFlush callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceSelfManagedIoFlush to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -1610,7 +1632,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1623,7 +1644,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleSelfManagedIoFlushImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoFlush");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoFlush");
         goto Exit;
     }
 
@@ -1646,16 +1667,17 @@ DMF_ModuleCollectionSelfManagedIoInit(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoInit callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceSelfManagedIoInit to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1664,7 +1686,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1677,7 +1698,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleSelfManagedIoInitImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoInit");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoInit");
         ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
@@ -1703,16 +1724,17 @@ DMF_ModuleCollectionSelfManagedIoSuspend(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoSuspend callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceSelfManagedIoSuspend to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1721,7 +1743,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1734,7 +1755,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleSelfManagedIoSuspendImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoSuspend");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoSuspend");
         ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
@@ -1760,16 +1781,17 @@ DMF_ModuleCollectionSelfManagedIoRestart(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSelfManagedIoRestart callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceSelfManagedIoRestart to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1778,7 +1800,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1791,7 +1812,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleSelfManagedIoRestartImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoRestart");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleSelfManagedIoRestart");
         ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
@@ -1817,12 +1838,12 @@ DMF_ModuleCollectionSurpriseRemoval(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtSurpriseRemoval callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceSurpriseRemoval to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -1833,7 +1854,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1846,7 +1866,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleSurpriseRemovalImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleSurpriseRemoval");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleSurpriseRemoval");
         goto Exit;
     }
 
@@ -1869,16 +1889,17 @@ DMF_ModuleCollectionQueryRemove(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtQueryRemove callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceQueryRemove to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1887,7 +1908,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1900,7 +1920,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleQueryRemoveImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleQueryRemove");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleQueryRemove");
         ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
@@ -1926,16 +1946,17 @@ DMF_ModuleCollectionQueryStop(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtQueryStop callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceQueryStop to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -1944,7 +1965,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -1957,7 +1977,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleQueryStopImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleQueryStop");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleQueryStop");
         ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
@@ -1984,12 +2004,12 @@ DMF_ModuleCollectionRelationsQuery(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtRelationsQuery callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceRelationsQuery to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -2002,7 +2022,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2015,7 +2034,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleRelationsQueryImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleRelationsQuery");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleRelationsQuery");
         goto Exit;
     }
 
@@ -2049,16 +2068,19 @@ DMF_ModuleCollectionUsageNotificationEx(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtUsageNotificationEx callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceRelationsQuery to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
+    NotificationType - Same as passed from WDF.
+    IsInNotificationPath - Same as passed from WDF.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -2068,7 +2090,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2083,7 +2104,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleUsageNotificationExImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleUsageNotificationEx");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleUsageNotificationEx");
         goto Exit;
     }
 
@@ -2122,16 +2143,17 @@ DMF_ModuleCollectionArmWakeFromS0(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceArmWakeFromS0 callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceArmWakeFromS0 to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -2140,7 +2162,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2153,7 +2174,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleArmWakeFromS0Implemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleArmWakeFromS0");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleArmWakeFromS0");
         ntStatus = STATUS_SUCCESS;
         goto Exit;
     }
@@ -2179,12 +2200,12 @@ DMF_ModuleCollectionDisarmWakeFromS0(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceDisarmWakeFromS0 callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceDisarmWakeFromS0 to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -2195,7 +2216,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2208,7 +2228,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleDisarmWakeFromS0Implemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleDisarmWakeFromS0");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleDisarmWakeFromS0");
         goto Exit;
     }
 
@@ -2231,12 +2251,12 @@ DMF_ModuleCollectionWakeFromS0Triggered(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceWakeFromS0Triggered callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceWakeFromS0Triggered to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -2247,7 +2267,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2260,7 +2279,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleWakeFromS0TriggeredImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleWakeFromS0Triggered");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleWakeFromS0Triggered");
         goto Exit;
     }
 
@@ -2285,19 +2304,19 @@ DMF_ModuleCollectionArmWakeFromSxWithReason(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceArmWakeFromSxWithReason callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceArmWakeFromSxWithReason to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    DeviceWakeEnabled - A Boolean value that, if TRUE, indicates that the device's ability to wake the system is enabled.
-    ChildrenArmedForWake - A Boolean value that, if TRUE, indicates that the ability of one or more child devices
-                           to wake the system is enabled.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
+    DeviceWakeEnabled - Same as passed from WDF.
+    ChildrenArmedForWake - Same as passed from WDF.
 
 Return Value:
 
-    None
+    STATUS_SUCCESS on success if every Module in the list succeeds, or the NTSTATUS error
+    code from the Module that returns an error.
 
 --*/
 {
@@ -2307,7 +2326,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2322,7 +2340,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleArmWakeFromSxWithReasonImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleArmWakeFromSxWithReason");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleArmWakeFromSxWithReason");
         goto Exit;
     }
 
@@ -2361,12 +2379,12 @@ DMF_ModuleCollectionDisarmWakeFromSx(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceDisarmWakeFromSx callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceDisarmWakeFromSx to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -2377,7 +2395,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2390,7 +2407,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleDisarmWakeFromSxImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleDisarmWakeFromSx");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleDisarmWakeFromSx");
         goto Exit;
     }
 
@@ -2413,12 +2430,12 @@ DMF_ModuleCollectionWakeFromSxTriggered(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceWakeFromSxTriggered callback. This function
-    then calls the corresponding callback for each instantiated Module.
+    Given a DMFCOLLECTION, this function dispatches EvtDeviceWakeFromSxTriggered to
+    every Module associated with DMFCOLLECTION.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The Given DMFCOLLECtION which contains the list of Client Driver's instantiated Modules.
 
 Return Value:
 
@@ -2429,7 +2446,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2442,7 +2458,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleWakeFromSxTriggeredImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleWakeFromSxTriggered");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleWakeFromSxTriggered");
         goto Exit;
     }
 
@@ -2468,20 +2484,21 @@ DMF_ModuleCollectionFileCreate(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtDeviceFileCreate callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
-    handles the callback, this function returns to prevent any possible double handling.
+    Given a DMFCOLLECTION, this function dispatches EvtFileCreate to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
+    handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
     Device - WDF device object.
     Request - WDF Request with IOCTL parameters.
     FileObject - WDF file object that describes a file that is being opened for the specified request.
 
 Return Value:
 
-    TRUE if one of the instantiated Modules handled the callback.
+    TRUE if any of the Modules handled the Request, FALSE otherwise.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -2491,7 +2508,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p Request=0x%p", DmfCollection, Request);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2501,7 +2517,7 @@ Return Value:
     {
         // It means that none of the Modules in the Module Collection handled the request.
         //
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleFileCreate");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleFileCreate");
         goto Exit;
     }
 
@@ -2545,18 +2561,19 @@ DMF_ModuleCollectionFileCleanup(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtFileCleanup callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
-    handles the callback, this function returns to prevent any possible double handling.
+    Given a DMFCOLLECTION, this function dispatches EvtFileCleanup to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
+    handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    FileObject - WDF file object
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    FileObject - WDF file object that describes a file that is being opened for the specified request.
 
 Return Value:
 
-    TRUE if one of the instantiated Modules handled the callback.
+    TRUE if any of the Modules handled the Request, FALSE otherwise.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -2566,7 +2583,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2581,7 +2597,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleFileCleanupImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleFileCleanup");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleFileCleanup");
         goto Exit;
     }
 
@@ -2623,18 +2639,19 @@ DMF_ModuleCollectionFileClose(
 
 Routine Description:
 
-    The Client Driver may call this function in its Device EvtFileClose callback. This function
-    then calls the corresponding callback for each instantiated Module. As soon as one of the Modules
-    handles the callback, this function returns to prevent any possible double handling.
+    Given a DMFCOLLECTION, this function dispatches EvtFileClose to
+    every Module associated with DMFCOLLECTION. As soon as one of the Modules
+    handles the IOCTL, this function returns to prevent any possible double return of a WDFREQUEST.
 
 Arguments:
 
-    DmfCollection - DMF Module Collection which contains the list of Client Driver's instantiated Modules.
-    FileObject - WDF file object
+    DmfCollection - The given DMFCOLLECTION. (Contains the list of Client Driver's instantiated Modules.)
+    FileObject - WDF file object that describes a file that is being opened for the specified request.
 
 Return Value:
 
-    TRUE if one of the instantiated Modules handled the callback.
+    TRUE if any of the Modules handled the Request, FALSE otherwise.
+    In the FALSE case the Client Driver is expected to handle the request.
 
 --*/
 {
@@ -2644,7 +2661,6 @@ Return Value:
     PAGED_CODE();
 
     FuncEntryArguments(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
-    TraceInformation(DMF_TRACE, "DmfCollection=0x%p", DmfCollection);
 
     DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(DmfCollection);
 
@@ -2659,7 +2675,7 @@ Return Value:
     //
     if (! moduleCollectionHandle->DmfCallbacksWdfCheck.ModuleFileCloseImplemented)
     {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DMF_TRACE, "No Modules in Collection implement ModuleFileClose");
+        TraceEvents(TRACE_LEVEL_VERBOSE, DMF_TRACE, "No Modules in Collection implement ModuleFileClose");
         goto Exit;
     }
 
@@ -2690,6 +2706,13 @@ Exit:
 }
 #pragma code_seg()
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Module Collection Helper Functions
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 DMF_ModuleCollectionConfigListInitialize(
@@ -2708,19 +2731,19 @@ DMF_ModuleCollectionConfigAddAttributes(
 
 Routine Description:
 
-Add a Module's initialized Config structure to the list of Config structures
-that is used later to create a Module Collection.
+    Add a Module's initialized Config structure to the list of Config structures
+    that is used later to create a Module Collection.
 
 Arguments:
 
-ModuleCollectionConfig - Indicates how the Client wants to set up the Module Collection.
-ModuleAttributes - Module specific attributes for the Module to add to the list.
-ObjectAttributes - DMF specific attributes for the Module to add to the list.
-ResultantDmfModule - When the Module is created, its handle is written here so that Client can access the Module.
+    ModuleCollectionConfig - Indicates how the Client wants to set up the Module Collection.
+    ModuleAttributes - Module specific attributes for the Module to add to the list.
+    ObjectAttributes - DMF specific attributes for the Module to add to the list.
+    ResultantDmfModule - When the Module is created, its handle is written here so that Client can access the Module.
 
 Return Value:
 
-NTSTATUS
+    NTSTATUS
 
 --*/
 {
@@ -2758,9 +2781,13 @@ NTSTATUS
     ASSERT(NULL == ModuleAttributes->ResultantDmfModule);
     ModuleAttributes->ResultantDmfModule = ResultantDmfModule;
 
+    // This flag is set before the Client callback. Set it on a per Module basis now.
+    //
+    ModuleAttributes->IsTransportModule = ModuleCollectionConfig->DmfPrivate.IsTransportModule;
+
     // Module is created as part of a collection. It is not a DynamicModule.
     //
-    ModuleAttributes->DynamicModule = FALSE;
+    ModuleAttributes->DynamicModuleImmediate = FALSE;
 
     WDFMEMORY memoryConfigAndAttributes;
     VOID* memoryConfigAndAttributesBuffer;
@@ -2776,9 +2803,9 @@ NTSTATUS
     // DMF_#ModuleName#_Config (Variable Size).
     //
     totalSizeOfAttributesAndCallbacksAndConfig = sizeof(DMF_MODULE_ATTRIBUTES) +
-        sizeof(WDF_OBJECT_ATTRIBUTES) +
-        sizeof(DMF_MODULE_EVENT_CALLBACKS) +
-        ModuleAttributes->SizeOfModuleSpecificConfig;
+                                                 sizeof(WDF_OBJECT_ATTRIBUTES) +
+                                                 sizeof(DMF_MODULE_EVENT_CALLBACKS) +
+                                                 ModuleAttributes->SizeOfModuleSpecificConfig;
     ntStatus = WdfMemoryCreate(&objectAttributes,
                                NonPagedPoolNx,
                                DMF_TAG,
@@ -2984,11 +3011,11 @@ DMF_ModuleCollection_ModuleValidate(
 
 Routine Description:
 
-    Populate DmfCallbacksWdfCheck structure.
+    Given a Module handle, populate its DmfCallbacksWdfCheck structure.
 
 Arguments:
 
-    ModuleHandle - Module Handle.
+    ModuleHandle - The given Module handle.
 
 Return Value:
 
@@ -3144,19 +3171,18 @@ DMF_ModuleCollectionCreate(
 
 Routine Description:
 
-    Instantiates all the Modules defined by the Module Initialization Table.
+    Creates a DMFMODULECOLLECTION.
 
 Arguments:
 
+    DmfDeviceInit - Client Driver's PDMFDEVICE_INIT structure.
     ModuleCollectionConfig - Module Collection Config populated by the Client Driver.
-    ClientDriverContext - Client Driver Device Context (used for callbacks).
-    DmfCollecton - On success, the resultant DMFCOLLECTION.
+    DmfCollecton - On success, the resultant DMFCOLLECTION. This handle is used by the DMF Container Driver
+                   to send messages to all instantiated Modules.
 
 Return Value:
 
-    The Module Collection Handle is returned. This handle is used by the DMF Dispatcher
-    to send messages to all instantiated Modules. The Client Driver must store this handle
-    if the Client Driver uses the DMF Dispatcher.
+    NTSTATUS
 
 --*/
 {
@@ -3249,7 +3275,7 @@ Return Value:
     #pragma warning(suppress:6387)
     numberOfClientModulesToCreate = WdfCollectionGetCount(ModuleCollectionConfig->DmfPrivate.ListOfConfigs);
 
-    // If BranchTrackModuleConfig is not NULL, Client driver supports BranchTrack.
+    // If BranchTrackModuleConfig is not NULL, Client Driver supports BranchTrack.
     //
     if (ModuleCollectionConfig->BranchTrackModuleConfig != NULL)
     {
@@ -3439,10 +3465,12 @@ Return Value:
         if (ModuleCollectionConfig->DmfPrivate.ParentDmfModule != NULL)
         {
             moduleObjectAttributesPointer->ParentObject = ModuleCollectionConfig->DmfPrivate.ParentDmfModule;
+            moduleAttributesPointer->DynamicModule = DMF_IsModuleDynamic(ModuleCollectionConfig->DmfPrivate.ParentDmfModule);
         }
         else
         {
             moduleObjectAttributesPointer->ParentObject = ModuleCollectionConfig->DmfPrivate.ClientDriverWdfDevice;
+            moduleAttributesPointer->DynamicModule = FALSE;
         }
         ntStatus = moduleAttributesPointer->InstanceCreator(ModuleCollectionConfig->DmfPrivate.ClientDriverWdfDevice,
                                                             moduleAttributesPointer,
@@ -3459,11 +3487,17 @@ Return Value:
 
         dmfObject = DMF_ModuleToObject(dmfModule);
 
+        // If the Module is not instantiated as a Transport Module, and the Client wants the 
+        // Module Handle, give it to the Client.
+        //
         if (moduleAttributesPointer->ResultantDmfModule != NULL)
         {
-            // The Client Driver requests the DmfModule. Give the Client Driver the newly created Module's handle.
-            //
-            *moduleAttributesPointer->ResultantDmfModule = dmfModule;
+            if (!moduleAttributesPointer->IsTransportModule)
+            {
+                // The Client Driver requests the DmfModule. Give the Client Driver the newly created Module's handle.
+                //
+                *moduleAttributesPointer->ResultantDmfModule = dmfModule;
+            }
         }
         else
         {
@@ -3618,9 +3652,7 @@ Arguments:
 
 Return Value:
 
-    The Module Collection Handle is returned. This handle is used by the DMF Dispatcher
-    to send messages to all instantiated Modules. The Client Driver must store this handle
-    if the Client Driver uses the DMF Dispatcher.
+    NTSTATUS
 
 --*/
 {
@@ -3658,8 +3690,8 @@ Return Value:
 #if !defined(DEBUG)
 #error You cannot inject faults in non-Debug builds.
 #endif // !defined(DEBUG)
-    // Inject fault. Open only half the modules, then return error.
-    //
+        // Inject fault. Open only half the modules, then return error.
+        //
         if (driverModuleIndex >= (moduleCollectionHandle->NumberOfClientDriverDmfModules / 2))
         {
             ntStatus = STATUS_UNSUCCESSFUL;
@@ -3667,10 +3699,11 @@ Return Value:
 #endif // defined(USE_DMF_INJECT_FAULT_PARTIAL_OPEN)
         if (! NT_SUCCESS(ntStatus))
         {
-            // Client Module has failed to open. Need to clean up Module Collection and fail this
-            // entire call.
+            // Client Module has failed to open. Fail this call. Module Collection and its 
+            // child objects will be deleted.
             //
             TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_Module_OpenOrRegisterNotificationOnCreate fails: ntStatus=%!STATUS!", ntStatus);
+            goto Exit;
         }
     }
 
@@ -3700,9 +3733,18 @@ Return Value:
     }
 #endif // !defined(DMF_USER_MODE)
 
+Exit:
+
     return ntStatus;
 }
 #pragma code_seg()
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Client Driver API
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 
 #pragma code_seg("PAGE")
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -3726,8 +3768,8 @@ Routine Description:
 
 Arguments:
 
-    Device - WDFDEVICE object created by Client Driver
-    DmfDeviceInitPointer - Pointer to DmfDeviceInit
+    Device - WDFDEVICE object created by Client Driver.
+    DmfDeviceInitPointer - Pointer to DmfDeviceInit.
 
 Return Value:
 
@@ -3874,6 +3916,13 @@ Return Value:
     dmfDeviceContext->DmfCollection = dmfCollection;
     dmfDeviceContext->ClientImplementsEvtWdfDriverDeviceAdd = DMF_DmfDeviceInitClientImplementsDeviceAdd(dmfDeviceInit);
 
+    // Store information needed to automatically call DMF_Invoke_DeviceCallbacksDestroy() when the
+    // Client is unable to do so (e.g., in the case of non-PnP drivers).
+    //
+    DMF_MODULE_COLLECTION* moduleCollectionHandle = DMF_CollectionToHandle(dmfCollection);
+    moduleCollectionHandle->ClientDevice = Device;
+    moduleCollectionHandle->ManualDestroyCallbackIsPending = FALSE;
+
 Exit:
 
     dmfDeviceInit = NULL;
@@ -3908,7 +3957,7 @@ Arguments:
 
 Return Value:
 
-    NTSTATUS
+    None
 
 --*/
 {

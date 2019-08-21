@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -367,7 +368,7 @@ Return Value:
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -710,14 +711,6 @@ Return Value:
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_SpbTarget;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_SpbTarget;
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -752,29 +745,29 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_SpbTarget;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_SpbTarget;
 
     PAGED_CODE();
 
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_SpbTarget);
-    DmfCallbacksDmf_SpbTarget.ChildModulesAdd = DMF_SpbTarget_ChildModulesAdd;
-    DmfCallbacksDmf_SpbTarget.DeviceResourcesAssign = DMF_SpbTarget_ResourcesAssign;
-    DmfCallbacksDmf_SpbTarget.DeviceOpen = DMF_SpbTarget_Open;
-    DmfCallbacksDmf_SpbTarget.DeviceClose = DMF_SpbTarget_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_SpbTarget);
+    dmfCallbacksDmf_SpbTarget.ChildModulesAdd = DMF_SpbTarget_ChildModulesAdd;
+    dmfCallbacksDmf_SpbTarget.DeviceResourcesAssign = DMF_SpbTarget_ResourcesAssign;
+    dmfCallbacksDmf_SpbTarget.DeviceOpen = DMF_SpbTarget_Open;
+    dmfCallbacksDmf_SpbTarget.DeviceClose = DMF_SpbTarget_Close;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_SpbTarget,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_SpbTarget,
                                             SpbTarget,
                                             DMF_CONTEXT_SpbTarget,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_PrepareHardware);
 
-    DmfModuleDescriptor_SpbTarget.CallbacksDmf = &DmfCallbacksDmf_SpbTarget;
-
-    DmfModuleDescriptor_SpbTarget.ModuleConfigSize = sizeof(DMF_CONFIG_SpbTarget);
+    dmfModuleDescriptor_SpbTarget.CallbacksDmf = &dmfCallbacksDmf_SpbTarget;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_SpbTarget,
+                                &dmfModuleDescriptor_SpbTarget,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -1080,8 +1073,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SpbTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SpbTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1115,8 +1108,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SpbTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SpbTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1157,8 +1150,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SpbTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SpbTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 
@@ -1203,8 +1196,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_SpbTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 SpbTarget);
 
     moduleContext = DMF_CONTEXT_GET(DmfModule);
 

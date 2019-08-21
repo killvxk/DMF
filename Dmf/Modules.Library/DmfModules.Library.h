@@ -38,6 +38,10 @@ extern "C"
 #include "..\Framework\Modules.Core\DmfModules.Core.h"
 #include "DmfModules.Library.Public.h"
 
+// Interfaces in this Library.
+//
+#include "Dmf_Interface_ComponentFirmwareUpdate.h"
+
 // All the Modules in this Library.
 //
 #include "Dmf_PingPongBuffer.h"
@@ -77,10 +81,10 @@ extern "C"
 #include "Dmf_ComponentFirmwareUpdate.h"
 #include "Dmf_SpbTarget.h"
 #include "Dmf_VirtualHidAmbientLightSensor.h"
-
-// Transport Related Definitions.
-//
-#include "Dmf_Transport_ComponentFirmwareUpdate.h"
+#include "Dmf_VirtualHidAmbientColorSensor.h"
+#include "Dmf_String.h"
+#include "Dmf_Rundown.h"
+#include "Dmf_File.h"
 
 #if defined(__cplusplus)
 }

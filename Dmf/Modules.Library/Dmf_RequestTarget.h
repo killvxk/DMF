@@ -23,15 +23,17 @@ Environment:
 // Client Driver callback function to be called from single request completion routine.
 //
 typedef
-_Function_class_(EVT_DMF_RequestTarget_SingleAsynchronousBufferOutput)
+_Function_class_(EVT_DMF_RequestTarget_SendCompletion)
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 VOID
-EVT_DMF_RequestTarget_SingleAsynchronousBufferOutput(_In_ DMFMODULE DmfModule,
-                                                     _In_ VOID* ClientRequestContext,
-                                                     _In_reads_(OutputBufferSize) VOID* OutputBuffer,
-                                                     _In_ size_t OutputBufferSize,
-                                                     _In_ NTSTATUS CompletionStatus);
+EVT_DMF_RequestTarget_SendCompletion(_In_ DMFMODULE DmfModule,
+                                     _In_ VOID* ClientRequestContext,
+                                     _In_reads_(InputBufferBytesWritten) VOID* InputBuffer,
+                                     _In_ size_t InputBufferBytesWritten,
+                                     _In_reads_(OutputBufferBytesRead) VOID* OutputBuffer,
+                                     _In_ size_t OutputBufferBytesRead,
+                                     _In_ NTSTATUS CompletionStatus);
 
 // This macro declares the following functions:
 // DMF_RequestTarget_ATTRIBUTES_INIT()
@@ -67,7 +69,23 @@ DMF_RequestTarget_Send(
     _In_ ContinuousRequestTarget_RequestType RequestType,
     _In_ ULONG RequestIoctl,
     _In_ ULONG RequestTimeoutMilliseconds,
-    _In_opt_ EVT_DMF_RequestTarget_SingleAsynchronousBufferOutput* EvtRequestTargetSingleAsynchronousRequest,
+    _In_opt_ EVT_DMF_RequestTarget_SendCompletion* EvtRequestTargetSingleAsynchronousRequest,
+    _In_opt_ VOID* SingleAsynchronousRequestClientContext
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DMF_RequestTarget_SendEx(
+    _In_ DMFMODULE DmfModule,
+    _In_reads_bytes_(RequestLength) VOID* RequestBuffer,
+    _In_ size_t RequestLength,
+    _Out_writes_bytes_(ResponseLength) VOID* ResponseBuffer,
+    _In_ size_t ResponseLength,
+    _In_ ContinuousRequestTarget_RequestType RequestType,
+    _In_ ULONG RequestIoctl,
+    _In_ ULONG RequestTimeoutMilliseconds,
+    _In_ ContinuousRequestTarget_CompletionOptions CompletionOption,
+    _In_opt_ EVT_DMF_RequestTarget_SendCompletion* EvtRequestTargetSingleAsynchronousRequest,
     _In_opt_ VOID* SingleAsynchronousRequestClientContext
     );
 

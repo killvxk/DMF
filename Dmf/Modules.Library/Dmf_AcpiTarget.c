@@ -20,6 +20,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.h"
 #include "DmfModules.Library.Trace.h"
 
@@ -731,7 +732,7 @@ Exit:
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -739,13 +740,6 @@ Exit:
 // DMF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_AcpiTarget;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -781,22 +775,21 @@ Return Value:
 --*/
 {
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_AcpiTarget;
 
     PAGED_CODE();
 
     FuncEntry(DMF_TRACE);
 
-    DMF_MODULE_DESCRIPTOR_INIT(DmfModuleDescriptor_AcpiTarget,
+    DMF_MODULE_DESCRIPTOR_INIT(dmfModuleDescriptor_AcpiTarget,
                                AcpiTarget,
                                DMF_MODULE_OPTIONS_PASSIVE,
                                DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_AcpiTarget.ModuleConfigSize = sizeof(DMF_CONFIG_AcpiTarget);
-
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_AcpiTarget,
+                                &dmfModuleDescriptor_AcpiTarget,
                                 DmfModule);
     if (! NT_SUCCESS(ntStatus))
     {
@@ -813,12 +806,15 @@ Return Value:
 
 _Must_inspect_result_
 __drv_requiresIRQL(PASSIVE_LEVEL)
+// 'ReturnBuffer' could be '0':  this does not adhere to the specification for the function 'AcpiTarget_EvaluateAcpiMethod'.
+//
+#pragma warning(disable:6387)
 NTSTATUS
 DMF_AcpiTarget_EvaluateMethod(
     _In_ DMFMODULE DmfModule,
     _In_ ULONG MethodName,
     _In_opt_ VOID* InputBuffer,
-    __deref_opt_out_bcount_opt(*ReturnBufferSize) VOID* *ReturnBuffer,
+    __deref_opt_out_bcount_opt(*ReturnBufferSize) VOID** ReturnBuffer,
     _Out_opt_ ULONG* ReturnBufferSize,
     _In_ ULONG Tag
     )
@@ -903,8 +899,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_AcpiTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 AcpiTarget);
 
     outputBuffer = NULL;
     outputBufferSize = 0;
@@ -1043,8 +1039,8 @@ Return Value:
         *ReturnBufferSize = 0;
     }
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_AcpiTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 AcpiTarget);
 
     ntStatus = AcpiTarget_InvokeDsm(DmfModule,
                                     FunctionIndex,
@@ -1099,8 +1095,8 @@ Return Value:
 
     FuncEntry(DMF_TRACE);
 
-    DMF_HandleValidate_ModuleMethod(DmfModule,
-                                    &DmfModuleDescriptor_AcpiTarget);
+    DMFMODULE_VALIDATE_IN_METHOD(DmfModule,
+                                 AcpiTarget);
 
     ntStatus = AcpiTarget_InvokeDsm(DmfModule,
                                     FunctionIndex,

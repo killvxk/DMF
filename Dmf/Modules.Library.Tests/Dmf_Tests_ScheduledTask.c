@@ -19,6 +19,7 @@ Environment:
 
 // DMF and this Module's Library specific definitions.
 //
+#include "DmfModule.h"
 #include "DmfModules.Library.Tests.h"
 #include "DmfModules.Library.Tests.Trace.h"
 
@@ -396,7 +397,7 @@ Tests_ScheduledTask_RunManualTasks(
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
-// Wdf Module Callbacks
+// WDF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 
@@ -541,6 +542,11 @@ Tests_ScheduledTask_ModuleD0Exit(
 #pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
+// WDF Module Callbacks
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
 // DMF Module Callbacks
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -653,14 +659,69 @@ Return Value:
 }
 #pragma code_seg()
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-// DMF Module Descriptor
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-//
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID
+DMF_Tests_ScheduledTask_ChildModulesAdd(
+    _In_ DMFMODULE DmfModule,
+    _In_ DMF_MODULE_ATTRIBUTES* DmfParentModuleAttributes,
+    _In_ PDMFMODULE_INIT DmfModuleInit
+    )
+/*++
 
-static DMF_MODULE_DESCRIPTOR DmfModuleDescriptor_Tests_ScheduledTask;
-static DMF_CALLBACKS_DMF DmfCallbacksDmf_Tests_ScheduledTask;
-static DMF_CALLBACKS_WDF DmfCallbacksWdf_Tests_ScheduledTask;
+Routine Description:
+
+    Configure and add the required Child Modules to the given Parent Module.
+
+Arguments:
+
+    DmfModule - The given Parent Module.
+    DmfParentModuleAttributes - Pointer to the parent DMF_MODULE_ATTRIBUTES structure.
+    DmfModuleInit - Opaque structure to be passed to DMF_DmfModuleAdd.
+
+Return Value:
+
+    None
+
+--*/
+{
+    DMF_MODULE_ATTRIBUTES moduleAttributes;
+    DMF_CONTEXT_Tests_ScheduledTask* moduleContext;
+    DMF_CONFIG_ScheduledTask moduleConfigScheduledTask;
+
+    UNREFERENCED_PARAMETER(DmfParentModuleAttributes);
+
+    PAGED_CODE();
+
+    FuncEntry(DMF_TRACE);
+
+    moduleContext = DMF_CONTEXT_GET(DmfModule);
+
+    // Thread
+    // ------
+    //
+    for (ULONG scheduledTaskIndex = 0; scheduledTaskIndex < TASK_COUNT; scheduledTaskIndex++)
+    {
+        DMF_CONFIG_ScheduledTask_AND_ATTRIBUTES_INIT(&moduleConfigScheduledTask,
+                                                     &moduleAttributes);
+        moduleContext->TaskContext[scheduledTaskIndex].DescriptionIndex = scheduledTaskIndex;
+        moduleContext->TaskContext[scheduledTaskIndex].TimesExecuted = 0;
+        moduleConfigScheduledTask.EvtScheduledTaskCallback = Tests_ScheduledTask_TaskCallback;
+        moduleConfigScheduledTask.CallbackContext = &moduleContext->TaskContext[scheduledTaskIndex];
+        moduleConfigScheduledTask.PersistenceType = TaskDescriptionArray[scheduledTaskIndex].PersistenceType;
+        moduleConfigScheduledTask.ExecutionMode = TaskDescriptionArray[scheduledTaskIndex].ExecutionMode;
+        moduleConfigScheduledTask.ExecuteWhen = TaskDescriptionArray[scheduledTaskIndex].ExecuteWhen;
+        moduleConfigScheduledTask.TimerPeriodMsOnSuccess = TASK_DELAY_MS;
+        moduleConfigScheduledTask.TimerPeriodMsOnFail = TASK_DELAY_MS;
+        DMF_DmfModuleAdd(DmfModuleInit,
+                         &moduleAttributes,
+                         WDF_NO_OBJECT_ATTRIBUTES,
+                         &moduleContext->DmfModuleScheduledTask[scheduledTaskIndex]);
+    }
+
+    FuncExitVoid(DMF_TRACE);
+}
+#pragma code_seg()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Public Calls by Client
@@ -696,97 +757,42 @@ Return Value:
 
 --*/
 {
-    DMFMODULE dmfModule;
-    DMF_CONTEXT_Tests_ScheduledTask* moduleContext;
-    DMF_CONFIG_ScheduledTask moduleConfigScheduledTask;
-    WDF_OBJECT_ATTRIBUTES objectAttributes;
-    DMF_MODULE_ATTRIBUTES moduleAttributes;
-    LONG index;
     NTSTATUS ntStatus;
+    DMF_MODULE_DESCRIPTOR dmfModuleDescriptor_Tests_ScheduledTask;
+    DMF_CALLBACKS_DMF dmfCallbacksDmf_Tests_ScheduledTask;
+    DMF_CALLBACKS_WDF dmfCallbacksWdf_Tests_ScheduledTask;
 
     PAGED_CODE();
 
-    dmfModule = NULL;
-
-    DMF_CALLBACKS_DMF_INIT(&DmfCallbacksDmf_Tests_ScheduledTask);
-    DmfCallbacksDmf_Tests_ScheduledTask.DeviceOpen = Tests_ScheduledTask_Open;
-    DmfCallbacksDmf_Tests_ScheduledTask.DeviceClose = Tests_ScheduledTask_Close;
+    DMF_CALLBACKS_DMF_INIT(&dmfCallbacksDmf_Tests_ScheduledTask);
+    dmfCallbacksDmf_Tests_ScheduledTask.DeviceOpen = Tests_ScheduledTask_Open;
+    dmfCallbacksDmf_Tests_ScheduledTask.DeviceClose = Tests_ScheduledTask_Close;
 
 
-    DMF_CALLBACKS_WDF_INIT(&DmfCallbacksWdf_Tests_ScheduledTask);
-    DmfCallbacksWdf_Tests_ScheduledTask.ModulePrepareHardware = Tests_ScheduledTask_ModulePrepareHardware;
-    DmfCallbacksWdf_Tests_ScheduledTask.ModuleD0Entry = Tests_ScheduledTask_ModuleD0Entry;
-    DmfCallbacksWdf_Tests_ScheduledTask.ModuleD0Exit = Tests_ScheduledTask_ModuleD0Exit;
+    DMF_CALLBACKS_WDF_INIT(&dmfCallbacksWdf_Tests_ScheduledTask);
+    dmfCallbacksDmf_Tests_ScheduledTask.ChildModulesAdd = DMF_Tests_ScheduledTask_ChildModulesAdd;
+    dmfCallbacksWdf_Tests_ScheduledTask.ModulePrepareHardware = Tests_ScheduledTask_ModulePrepareHardware;
+    dmfCallbacksWdf_Tests_ScheduledTask.ModuleD0Entry = Tests_ScheduledTask_ModuleD0Entry;
+    dmfCallbacksWdf_Tests_ScheduledTask.ModuleD0Exit = Tests_ScheduledTask_ModuleD0Exit;
 
-    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(DmfModuleDescriptor_Tests_ScheduledTask,
+    DMF_MODULE_DESCRIPTOR_INIT_CONTEXT_TYPE(dmfModuleDescriptor_Tests_ScheduledTask,
                                             Tests_ScheduledTask,
                                             DMF_CONTEXT_Tests_ScheduledTask,
                                             DMF_MODULE_OPTIONS_PASSIVE,
                                             DMF_MODULE_OPEN_OPTION_OPEN_Create);
 
-    DmfModuleDescriptor_Tests_ScheduledTask.CallbacksDmf = &DmfCallbacksDmf_Tests_ScheduledTask;
-    DmfModuleDescriptor_Tests_ScheduledTask.CallbacksWdf = &DmfCallbacksWdf_Tests_ScheduledTask;
+    dmfModuleDescriptor_Tests_ScheduledTask.CallbacksDmf = &dmfCallbacksDmf_Tests_ScheduledTask;
+    dmfModuleDescriptor_Tests_ScheduledTask.CallbacksWdf = &dmfCallbacksWdf_Tests_ScheduledTask;
 
     ntStatus = DMF_ModuleCreate(Device,
                                 DmfModuleAttributes,
                                 ObjectAttributes,
-                                &DmfModuleDescriptor_Tests_ScheduledTask,
-                                &dmfModule);
+                                &dmfModuleDescriptor_Tests_ScheduledTask,
+                                DmfModule);
     if (!NT_SUCCESS(ntStatus))
     {
         TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ModuleCreate fails: ntStatus=%!STATUS!", ntStatus);
-        goto Exit;
     }
-
-    moduleContext = DMF_CONTEXT_GET(dmfModule);
-
-    // Create child modules
-    //
-
-    // DmfModule will be set as ParentObject for all child modules.
-    //
-    WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
-    objectAttributes.ParentObject = dmfModule;
-
-    // ScheduledTask array
-    // -------------------
-    //
-    for (index = 0; index < TASK_COUNT; index++)
-    {
-        DMF_CONFIG_ScheduledTask_AND_ATTRIBUTES_INIT(&moduleConfigScheduledTask,
-                                                     &moduleAttributes);
-        moduleContext->TaskContext[index].DescriptionIndex = index;
-        moduleContext->TaskContext[index].TimesExecuted = 0;
-        moduleConfigScheduledTask.EvtScheduledTaskCallback = Tests_ScheduledTask_TaskCallback;
-        moduleConfigScheduledTask.CallbackContext = &moduleContext->TaskContext[index];
-        moduleConfigScheduledTask.PersistenceType = TaskDescriptionArray[index].PersistenceType;
-        moduleConfigScheduledTask.ExecutionMode = TaskDescriptionArray[index].ExecutionMode;
-        moduleConfigScheduledTask.ExecuteWhen = TaskDescriptionArray[index].ExecuteWhen;
-        moduleConfigScheduledTask.TimerPeriodMsOnSuccess = TASK_DELAY_MS;
-        moduleConfigScheduledTask.TimerPeriodMsOnFail = TASK_DELAY_MS;
-        ntStatus = DMF_ScheduledTask_Create(Device,
-                                         &moduleAttributes,
-                                         &objectAttributes,
-                                         &moduleContext->DmfModuleScheduledTask[index]);
-        if (!NT_SUCCESS(ntStatus))
-        {
-            TraceEvents(TRACE_LEVEL_ERROR, DMF_TRACE, "DMF_ScheduledTask_Create fails: ntStatus=%!STATUS!", ntStatus);
-            goto Exit;
-        }
-    }
-    
-    *DmfModule = dmfModule;
-
-Exit:
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        if (NULL != dmfModule)
-        {
-            DMF_ModuleDestroy(dmfModule);
-            dmfModule = NULL;
-        }
-    }    
 
     return(ntStatus);
 }
